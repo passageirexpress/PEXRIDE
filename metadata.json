@@ -1,0 +1,5 @@
+{
+  "name": "PEX RIDE",
+  "description": "Premium mobility platform combining corporate rigor with tourist curation.",
+  "requestFramePermissions": ["geolocation"]
+}
