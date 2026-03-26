@@ -6,13 +6,58 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { MapPin, Clock, Star, Music, Thermometer, VolumeX, Crown, Navigation, CheckCircle2 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { MapPin, Clock, Star, Music, Thermometer, VolumeX, Crown, Navigation, CheckCircle2, ChevronLeft, ChevronRight, User } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+
+const VEHICLES = [
+  {
+    id: 'business',
+    name: 'Mercedes S-Class',
+    type: 'Business',
+    capacity: '3 Pax • 2 Bags',
+    price: 380,
+    rating: 4.9,
+    image: 'https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&q=80&w=400&h=200',
+    driver: {
+      name: 'João Silva',
+      rating: 4.9,
+      trips: 1240,
+      photo: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=150&h=150'
+    }
+  },
+  {
+    id: 'first-class',
+    name: 'Mercedes V-Class',
+    type: 'First Class',
+    capacity: '6 Pax • 6 Bags',
+    price: 450,
+    rating: 5.0,
+    image: 'https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?auto=format&fit=crop&q=80&w=400&h=200',
+    driver: {
+      name: 'Miguel Santos',
+      rating: 5.0,
+      trips: 850,
+      photo: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150&h=150'
+    }
+  }
+];
 
 export default function PassengerApp() {
   const [tripType, setTripType] = useState('experience');
   const [silentMode, setSilentMode] = useState(false);
   const [temperature, setTemperature] = useState([22]);
+  const [selectedVehicleIdx, setSelectedVehicleIdx] = useState(0);
+  const [showSummary, setShowSummary] = useState(false);
+
+  const selectedVehicle = VEHICLES[selectedVehicleIdx];
+
+  const handleNextVehicle = () => {
+    setSelectedVehicleIdx((prev) => (prev + 1) % VEHICLES.length);
+  };
+
+  const handlePrevVehicle = () => {
+    setSelectedVehicleIdx((prev) => (prev - 1 + VEHICLES.length) % VEHICLES.length);
+  };
 
   return (
     <div className="flex-1 flex flex-col md:flex-row bg-gray-50 overflow-hidden">
@@ -99,49 +144,78 @@ export default function PassengerApp() {
           )}
 
           {/* Fleet Selector */}
-          <div className="space-y-4">
-            <h3 className="font-semibold text-pex-blue uppercase tracking-wider text-sm">Select Vehicle</h3>
-            <div className="flex overflow-x-auto pb-4 gap-4 snap-x">
-              <Card className="min-w-[240px] snap-center border-pex-blue border-2 relative overflow-hidden">
-                <div className="absolute top-0 right-0 bg-pex-blue text-white text-xs px-2 py-1 rounded-bl-lg">
-                  Business
-                </div>
-                <CardContent className="p-4">
-                  <div className="h-24 bg-gray-200 rounded-md mb-3 flex items-center justify-center overflow-hidden">
-                    <img src="https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&q=80&w=400&h=200" alt="Mercedes E-Class" className="object-cover w-full h-full" />
-                  </div>
-                  <h4 className="font-bold text-lg">Mercedes S-Class</h4>
-                  <p className="text-sm text-gray-500 mb-3">3 Pax • 2 Bags</p>
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-xl">€380</span>
-                    <div className="flex items-center gap-1 text-xs text-gray-500">
-                      <Star size={12} className="fill-pex-gold text-pex-gold" />
-                      <span>4.9 (Chauffeur)</span>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card className="min-w-[240px] snap-center opacity-70 hover:opacity-100 transition-opacity cursor-pointer">
-                <div className="absolute top-0 right-0 bg-gray-800 text-white text-xs px-2 py-1 rounded-bl-lg">
-                  First Class
-                </div>
-                <CardContent className="p-4">
-                  <div className="h-24 bg-gray-200 rounded-md mb-3 flex items-center justify-center overflow-hidden">
-                    <img src="https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?auto=format&fit=crop&q=80&w=400&h=200" alt="Mercedes V-Class" className="object-cover w-full h-full" />
-                  </div>
-                  <h4 className="font-bold text-lg">Mercedes V-Class</h4>
-                  <p className="text-sm text-gray-500 mb-3">6 Pax • 6 Bags</p>
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-xl">€450</span>
-                    <div className="flex items-center gap-1 text-xs text-gray-500">
-                      <Star size={12} className="fill-pex-gold text-pex-gold" />
-                      <span>5.0 (Chauffeur)</span>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+          <div className="space-y-4 relative">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-pex-blue uppercase tracking-wider text-sm">Select Vehicle</h3>
+              <div className="flex gap-2">
+                <Button variant="outline" size="icon" className="h-8 w-8 rounded-full" onClick={handlePrevVehicle}>
+                  <ChevronLeft size={16} />
+                </Button>
+                <Button variant="outline" size="icon" className="h-8 w-8 rounded-full" onClick={handleNextVehicle}>
+                  <ChevronRight size={16} />
+                </Button>
+              </div>
             </div>
+            
+            <div className="relative overflow-hidden rounded-xl pb-2">
+              <motion.div 
+                className="flex"
+                animate={{ x: `-${selectedVehicleIdx * 100}%` }}
+                transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+              >
+                {VEHICLES.map((vehicle, idx) => (
+                  <div key={vehicle.id} className="min-w-full px-1">
+                    <Card 
+                      className={`border-2 cursor-pointer transition-all duration-300 relative overflow-hidden ${selectedVehicleIdx === idx ? 'border-pex-blue shadow-md scale-100' : 'border-transparent opacity-70 scale-95 hover:opacity-100'}`}
+                      onClick={() => setSelectedVehicleIdx(idx)}
+                    >
+                      <div className={`absolute top-0 right-0 text-white text-xs px-3 py-1 rounded-bl-lg z-10 ${selectedVehicleIdx === idx ? 'bg-pex-blue' : 'bg-gray-800'}`}>
+                        {vehicle.type}
+                      </div>
+                      <CardContent className="p-4">
+                        <div className="h-32 bg-gray-100 rounded-md mb-3 flex items-center justify-center overflow-hidden relative">
+                          <img src={vehicle.image} alt={vehicle.name} className="object-cover w-full h-full" />
+                        </div>
+                        <h4 className="font-bold text-lg">{vehicle.name}</h4>
+                        <p className="text-sm text-gray-500 mb-3">{vehicle.capacity}</p>
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xl">€{vehicle.price}</span>
+                          <div className="flex items-center gap-1 text-xs text-gray-500">
+                            <Star size={12} className="fill-pex-gold text-pex-gold" />
+                            <span>{vehicle.rating} (Vehicle)</span>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                ))}
+              </motion.div>
+            </div>
+
+            {/* Driver Info */}
+            <AnimatePresence mode="wait">
+              <motion.div 
+                key={selectedVehicle.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="bg-white border border-gray-100 p-4 rounded-xl shadow-sm flex items-center gap-4"
+              >
+                <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200 border-2 border-pex-gold">
+                  <img src={selectedVehicle.driver.photo} alt={selectedVehicle.driver.name} className="w-full h-full object-cover" />
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-semibold text-pex-blue">{selectedVehicle.driver.name}</h4>
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <span className="flex items-center gap-1"><Star size={12} className="fill-pex-gold text-pex-gold" /> {selectedVehicle.driver.rating}</span>
+                    <span>•</span>
+                    <span>{selectedVehicle.driver.trips} trips</span>
+                  </div>
+                </div>
+                <Badge variant="secondary" className="bg-pex-gold/10 text-pex-gold">Chauffeur</Badge>
+              </motion.div>
+            </AnimatePresence>
           </div>
 
           {/* In-Car Personalization */}
@@ -193,13 +267,44 @@ export default function PassengerApp() {
         </div>
 
         <div className="p-6 bg-white border-t border-gray-200 mt-auto">
-          <div className="flex justify-between items-center mb-4">
-            <span className="text-gray-500">Total (Fixed Price)</span>
-            <span className="text-2xl font-bold text-pex-blue">€380</span>
-          </div>
-          <Button className="w-full bg-pex-blue hover:bg-pex-blue/90 text-white h-12 text-lg">
-            Confirm Booking
-          </Button>
+          {showSummary ? (
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="mb-4 space-y-3 bg-gray-50 p-4 rounded-lg border border-gray-100">
+              <h4 className="font-semibold text-pex-blue border-b pb-2">Trip Summary</h4>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Ride Type</span>
+                <span className="font-medium">{tripType === 'experience' ? 'Experience (with side trips)' : 'Quick Transfer'}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Vehicle</span>
+                <span className="font-medium">{selectedVehicle.name} ({selectedVehicle.type})</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Chauffeur</span>
+                <span className="font-medium">{selectedVehicle.driver.name}</span>
+              </div>
+              <div className="flex justify-between text-sm font-bold pt-2 border-t">
+                <span>Total</span>
+                <span className="text-pex-blue">€{selectedVehicle.price + (tripType === 'experience' ? 45 : 0)}</span>
+              </div>
+              <div className="flex gap-2 pt-4">
+                <Button variant="outline" className="flex-1" onClick={() => setShowSummary(false)}>Back</Button>
+                <Button className="flex-1 bg-pex-blue hover:bg-pex-blue/90 text-white">Confirm & Pay</Button>
+              </div>
+            </motion.div>
+          ) : (
+            <>
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-gray-500">Total (Fixed Price)</span>
+                <span className="text-2xl font-bold text-pex-blue">€{selectedVehicle.price + (tripType === 'experience' ? 45 : 0)}</span>
+              </div>
+              <Button 
+                className="w-full bg-pex-blue hover:bg-pex-blue/90 text-white h-12 text-lg"
+                onClick={() => setShowSummary(true)}
+              >
+                Review Booking
+              </Button>
+            </>
+          )}
         </div>
       </div>
 

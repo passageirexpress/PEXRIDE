@@ -1,0 +1,16 @@
+node_modules/@mswjs/interceptors/lib/node/fetch-BmXpK10r.cjs
+node_modules/@mswjs/interceptors/lib/node/fetch-BmXpK10r.cjs.map
+node_modules/@mswjs/interceptors/lib/node/fetch-G1DVwDKG.mjs.map
+node_modules/@mswjs/interceptors/lib/node/fetch-G1DVwDKG.mjs
+node_modules/@mswjs/interceptors/lib/browser/fetch-U3v3Y4ap.cjs
+node_modules/@mswjs/interceptors/lib/browser/fetch-DdKEdDOR.mjs.map
+node_modules/@mswjs/interceptors/lib/browser/fetch-U3v3Y4ap.cjs.map
+node_modules/@mswjs/interceptors/lib/browser/fetch-DdKEdDOR.mjs
+node_modules/@mswjs/interceptors/src/interceptors/fetch/index.ts
+node_modules/msw/lib/browser/index.js
+node_modules/msw/lib/browser/index.js.map
+node_modules/msw/lib/browser/index.mjs.map
+node_modules/msw/lib/browser/index.mjs
+node_modules/msw/lib/iife/index.js
+node_modules/msw/lib/iife/index.js.map
+node_modules/node-fetch/README.md
