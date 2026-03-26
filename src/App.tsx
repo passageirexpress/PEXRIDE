@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import PassengerApp from './pages/PassengerApp';
 import AdminDashboard from './pages/AdminDashboard';
 import { Car, ShieldCheck } from 'lucide-react';
+import { Analytics } from '@vercel/analytics/react';
 
 export default function App() {
   return (
@@ -32,6 +33,7 @@ export default function App() {
           </Routes>
         </main>
       </div>
+      <Analytics />
     </Router>
   );
 }
