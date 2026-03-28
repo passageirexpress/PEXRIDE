@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "michaelsouzaxt21@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && 
+                    request.resource.data.uid == userId &&
+                    request.resource.data.role in ['passenger', 'driver', 'admin'] &&
+                    ((isOwner(userId) && request.resource.data.role == 'passenger') || isAdmin());
+      allow update: if isAuthenticated() && 
+                    request.resource.data.role == resource.data.role &&
+                    (isOwner(userId) || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /rides/{rideId} {
+      allow read: if isAuthenticated() && (resource.data.passengerId == request.auth.uid || resource.data.driverId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && 
+                    request.resource.data.passengerId == request.auth.uid &&
+                    request.resource.data.status == 'requested' &&
+                    (request.resource.data.passengerId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && 
+                    (resource.data.passengerId == request.auth.uid || resource.data.driverId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /vehicles/{vehicleId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /chats/{chatId} {
+      allow read: if isOwner(chatId) || isAdmin();
+      allow write: if isOwner(chatId) || isAdmin();
+      
+      match /messages/{messageId} {
+        allow read: if isOwner(chatId) || isAdmin();
+        allow create: if (isOwner(chatId) || isAdmin()) && 
+                      request.resource.data.senderId == request.auth.uid;
+      }
+    }
+
+    match /driverLocations/{driverId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(driverId) || isAdmin();
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

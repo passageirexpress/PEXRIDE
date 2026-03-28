@@ -6,8 +6,10 @@ import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
-import { MapPin, Clock, Star, Music, Thermometer, VolumeX, Crown, Navigation, CheckCircle2, ChevronLeft, ChevronRight, User } from 'lucide-react';
+import { MapPin, Clock, Star, Music, Thermometer, VolumeX, Crown, Navigation, CheckCircle2, ChevronLeft, ChevronRight, User, AlertCircle, MessageCircle, Send, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useFirebase } from '../FirebaseProvider';
+import { socket } from '../lib/socket';
 
 const VEHICLES = [
   {
@@ -43,13 +45,112 @@ const VEHICLES = [
 ];
 
 export default function PassengerApp() {
+  const { user, signIn } = useFirebase();
   const [tripType, setTripType] = useState('experience');
   const [silentMode, setSilentMode] = useState(false);
   const [temperature, setTemperature] = useState([22]);
   const [selectedVehicleIdx, setSelectedVehicleIdx] = useState(0);
   const [showSummary, setShowSummary] = useState(false);
+  const [bookingStatus, setBookingStatus] = useState<'idle' | 'booking' | 'success' | 'error'>('idle');
+  const [pois, setPois] = useState<any[]>([]);
+  const [selectedPois, setSelectedPois] = useState<string[]>([]);
+  
+  // Chat States
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!user || !isChatOpen) return;
+
+    // Join the chat room
+    socket.emit('join:chat', user.uid);
+
+    // Fetch initial messages
+    fetch(`/api/chats/${user.uid}/messages`)
+      .then(res => res.json())
+      .then(data => {
+        setMessages(data);
+        setTimeout(() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        }, 100);
+      })
+      .catch(err => console.error('Error fetching messages:', err));
+
+    // Listen for new messages
+    const handleNewMessage = (message: any) => {
+      if (message.chat_id === user.uid) {
+        setMessages(prev => [...prev, message]);
+        setTimeout(() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        }, 100);
+      }
+    };
+
+    socket.on('chat:message', handleNewMessage);
+    
+    socket.on('chat:typing', (data: { chatId: string, isTyping: boolean }) => {
+      if (data.chatId === user?.uid) {
+        setIsTyping(data.isTyping);
+      }
+    });
+
+    // Fetch POIs
+    fetch('/api/pois')
+      .then(res => res.json())
+      .then(data => setPois(data.filter((p: any) => p.status === 'Active')))
+      .catch(err => console.error('Error fetching POIs:', err));
+
+    return () => {
+      socket.off('chat:message', handleNewMessage);
+    };
+  }, [user, isChatOpen]);
+
+  const togglePoi = (poiId: string) => {
+    setSelectedPois(prev => 
+      prev.includes(poiId) ? prev.filter(id => id !== poiId) : [...prev, poiId]
+    );
+  };
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !newMessage.trim()) return;
+
+    try {
+      await fetch(`/api/chats/${user.uid}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderId: user.uid,
+          senderName: user.displayName,
+          text: newMessage,
+        }),
+      });
+      setNewMessage('');
+      handleTyping(false);
+    } catch (error) {
+      console.error('Error sending message:', error);
+    }
+  };
+
+  const handleTyping = (typing: boolean) => {
+    if (user) {
+      socket.emit('chat:typing', { chatId: user.uid, isTyping: typing });
+    }
+  };
 
   const selectedVehicle = VEHICLES[selectedVehicleIdx];
+  const poiCost = selectedPois.reduce((sum, id) => {
+    const poi = pois.find(p => p.id === id);
+    return sum + (poi ? parseFloat(poi.price) : 0);
+  }, 0);
+  const totalPrice = selectedVehicle.price + (tripType === 'experience' ? poiCost : 0);
 
   const handleNextVehicle = () => {
     setSelectedVehicleIdx((prev) => (prev + 1) % VEHICLES.length);
@@ -58,6 +159,76 @@ export default function PassengerApp() {
   const handlePrevVehicle = () => {
     setSelectedVehicleIdx((prev) => (prev - 1 + VEHICLES.length) % VEHICLES.length);
   };
+
+  const handleConfirmBooking = async () => {
+    if (!user) {
+      signIn();
+      return;
+    }
+
+    setBookingStatus('booking');
+    try {
+      await fetch('/api/rides', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          passengerId: user.uid,
+          passengerName: user.displayName,
+          pickupLocation: 'Four Seasons Hotel Ritz, Lisbon',
+          dropoffLocation: 'The Yeatman, Porto',
+          rideType: selectedVehicle.type,
+          vehicleName: selectedVehicle.name,
+          price: totalPrice,
+          preferences: {
+            silentMode,
+            temperature: temperature[0],
+            tripType
+          }
+        }),
+      });
+      setBookingStatus('success');
+    } catch (error) {
+      console.error('Error booking ride:', error);
+      setBookingStatus('error');
+    }
+  };
+
+  if (bookingStatus === 'success') {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-50 p-6">
+        <motion.div 
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="max-w-md w-full bg-white p-8 rounded-2xl shadow-2xl text-center space-y-6"
+        >
+          <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto">
+            <CheckCircle2 size={40} className="text-green-600" />
+          </div>
+          <h2 className="text-3xl font-bold text-pex-blue">Booking Confirmed!</h2>
+          <p className="text-gray-600">Your chauffeur is being assigned. You will receive a notification shortly.</p>
+          <div className="bg-gray-50 p-4 rounded-xl text-left space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Booking ID</span>
+              <span className="font-mono font-bold">PEX-{Math.random().toString(36).substr(2, 9).toUpperCase()}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Vehicle</span>
+              <span className="font-bold">{selectedVehicle.name}</span>
+            </div>
+          </div>
+          <Button 
+            className="w-full bg-pex-blue hover:bg-pex-blue/90 text-white"
+            onClick={() => {
+              setBookingStatus('idle');
+              setShowSummary(false);
+            }}
+          >
+            Done
+          </Button>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col md:flex-row bg-gray-50 overflow-hidden">
@@ -111,34 +282,33 @@ export default function PassengerApp() {
             >
               <h3 className="font-semibold text-pex-blue uppercase tracking-wider text-sm">Curated Side Trips</h3>
               <div className="grid gap-3">
-                <Card className="border-pex-gold/30 bg-pex-gold/5 cursor-pointer hover:bg-pex-gold/10 transition-colors">
-                  <CardContent className="p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-pex-gold/20 p-2 rounded-full">
-                        <MapPin size={18} className="text-pex-gold" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-pex-blue">Óbidos Castle</p>
-                        <p className="text-xs text-gray-500">+1.5 hrs • Medieval Village</p>
-                      </div>
-                    </div>
-                    <CheckCircle2 size={20} className="text-pex-gold" />
-                  </CardContent>
-                </Card>
-                <Card className="cursor-pointer hover:bg-gray-50 transition-colors">
-                  <CardContent className="p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-gray-100 p-2 rounded-full">
-                        <MapPin size={18} className="text-gray-500" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-gray-700">Nazaré Waves</p>
-                        <p className="text-xs text-gray-500">+1.0 hrs • Coastal View</p>
-                      </div>
-                    </div>
-                    <div className="text-sm font-medium text-gray-500">+€45</div>
-                  </CardContent>
-                </Card>
+                {pois.length === 0 ? (
+                  <p className="text-xs text-gray-400 italic">No side trips available at the moment.</p>
+                ) : (
+                  pois.map((poi) => (
+                    <Card 
+                      key={poi.id}
+                      className={`cursor-pointer transition-all ${selectedPois.includes(poi.id) ? 'border-pex-gold bg-pex-gold/5 shadow-sm' : 'hover:bg-gray-50'}`}
+                      onClick={() => togglePoi(poi.id)}
+                    >
+                      <CardContent className="p-4 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className={`p-2 rounded-full ${selectedPois.includes(poi.id) ? 'bg-pex-gold/20' : 'bg-gray-100'}`}>
+                            <MapPin size={18} className={selectedPois.includes(poi.id) ? 'text-pex-gold' : 'text-gray-500'} />
+                          </div>
+                          <div>
+                            <p className={`font-medium ${selectedPois.includes(poi.id) ? 'text-pex-blue' : 'text-gray-700'}`}>{poi.name}</p>
+                            <p className="text-xs text-gray-500">{poi.duration} • Experience</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-pex-blue">€{poi.price}</span>
+                          {selectedPois.includes(poi.id) && <CheckCircle2 size={20} className="text-pex-gold" />}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))
+                )}
               </div>
             </motion.div>
           )}
@@ -174,7 +344,7 @@ export default function PassengerApp() {
                       </div>
                       <CardContent className="p-4">
                         <div className="h-32 bg-gray-100 rounded-md mb-3 flex items-center justify-center overflow-hidden relative">
-                          <img src={vehicle.image} alt={vehicle.name} className="object-cover w-full h-full" />
+                          <img src={vehicle.image} alt={vehicle.name} className="object-cover w-full h-full" referrerPolicy="no-referrer" />
                         </div>
                         <h4 className="font-bold text-lg">{vehicle.name}</h4>
                         <p className="text-sm text-gray-500 mb-3">{vehicle.capacity}</p>
@@ -203,7 +373,7 @@ export default function PassengerApp() {
                 className="bg-white border border-gray-100 p-4 rounded-xl shadow-sm flex items-center gap-4"
               >
                 <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200 border-2 border-pex-gold">
-                  <img src={selectedVehicle.driver.photo} alt={selectedVehicle.driver.name} className="w-full h-full object-cover" />
+                  <img src={selectedVehicle.driver.photo} alt={selectedVehicle.driver.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                 </div>
                 <div className="flex-1">
                   <h4 className="font-semibold text-pex-blue">{selectedVehicle.driver.name}</h4>
@@ -284,24 +454,42 @@ export default function PassengerApp() {
               </div>
               <div className="flex justify-between text-sm font-bold pt-2 border-t">
                 <span>Total</span>
-                <span className="text-pex-blue">€{selectedVehicle.price + (tripType === 'experience' ? 45 : 0)}</span>
+                <span className="text-pex-blue">€{totalPrice}</span>
               </div>
+              {bookingStatus === 'error' && (
+                <div className="flex items-center gap-2 text-red-600 text-xs bg-red-50 p-2 rounded">
+                  <AlertCircle size={14} />
+                  <span>Error processing booking. Please try again.</span>
+                </div>
+              )}
               <div className="flex gap-2 pt-4">
-                <Button variant="outline" className="flex-1" onClick={() => setShowSummary(false)}>Back</Button>
-                <Button className="flex-1 bg-pex-blue hover:bg-pex-blue/90 text-white">Confirm & Pay</Button>
+                <Button variant="outline" className="flex-1" onClick={() => setShowSummary(false)} disabled={bookingStatus === 'booking'}>Back</Button>
+                <Button 
+                  className="flex-1 bg-pex-blue hover:bg-pex-blue/90 text-white" 
+                  onClick={handleConfirmBooking}
+                  disabled={bookingStatus === 'booking'}
+                >
+                  {bookingStatus === 'booking' ? 'Processing...' : 'Confirm & Pay'}
+                </Button>
               </div>
             </motion.div>
           ) : (
             <>
               <div className="flex justify-between items-center mb-4">
                 <span className="text-gray-500">Total (Fixed Price)</span>
-                <span className="text-2xl font-bold text-pex-blue">€{selectedVehicle.price + (tripType === 'experience' ? 45 : 0)}</span>
+                <span className="text-2xl font-bold text-pex-blue">€{totalPrice}</span>
               </div>
               <Button 
                 className="w-full bg-pex-blue hover:bg-pex-blue/90 text-white h-12 text-lg"
-                onClick={() => setShowSummary(true)}
+                onClick={() => {
+                  if (!user) {
+                    signIn();
+                  } else {
+                    setShowSummary(true);
+                  }
+                }}
               >
-                Review Booking
+                {user ? 'Review Booking' : 'Login to Book'}
               </Button>
             </>
           )}
@@ -390,6 +578,98 @@ export default function PassengerApp() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Support Chat Overlay */}
+      <div className="fixed bottom-6 right-6 z-50">
+        <AnimatePresence>
+          {isChatOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              className="bg-white rounded-2xl shadow-2xl w-80 md:w-96 border border-gray-200 flex flex-col mb-4 overflow-hidden"
+              style={{ height: '450px' }}
+            >
+              <div className="bg-pex-blue p-4 text-white flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                  <span className="font-semibold">PEX Support</span>
+                </div>
+                <Button variant="ghost" size="icon" className="text-white hover:bg-white/10 h-8 w-8" onClick={() => setIsChatOpen(false)}>
+                  <X size={18} />
+                </Button>
+              </div>
+
+              <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50">
+                {messages.length === 0 ? (
+                  <div className="text-center py-10 text-gray-400">
+                    <MessageCircle size={32} className="mx-auto mb-2 opacity-20" />
+                    <p className="text-sm">How can we help you today?</p>
+                  </div>
+                ) : (
+                  messages.map((msg) => (
+                    <div key={msg.id} className={`flex ${msg.sender_id === user?.uid ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${msg.sender_id === user?.uid ? 'bg-pex-blue text-white rounded-tr-none' : 'bg-white text-gray-800 shadow-sm border border-gray-100 rounded-tl-none'}`}>
+                        {msg.text}
+                        <div className={`flex items-center justify-between gap-4 mt-1 ${msg.sender_id === user?.uid ? 'text-white/60' : 'text-gray-400'}`}>
+                          <p className="text-[10px]">
+                            {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                          {msg.sender_id === user?.uid && (
+                            <CheckCircle2 size={10} className="text-pex-gold" />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+                {isTyping && (
+                  <div className="flex justify-start">
+                    <div className="bg-white text-gray-400 p-2 rounded-2xl rounded-tl-none shadow-sm text-[10px] italic flex items-center gap-2 border border-gray-100">
+                      <div className="flex gap-1">
+                        <span className="w-1 h-1 bg-gray-300 rounded-full animate-bounce" />
+                        <span className="w-1 h-1 bg-gray-300 rounded-full animate-bounce [animation-delay:0.2s]" />
+                        <span className="w-1 h-1 bg-gray-300 rounded-full animate-bounce [animation-delay:0.4s]" />
+                      </div>
+                      Support is typing...
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <form onSubmit={handleSendMessage} className="p-4 border-t bg-white flex gap-2">
+                <input
+                  type="text"
+                  value={newMessage}
+                  onChange={(e) => {
+                    setNewMessage(e.target.value);
+                    handleTyping(e.target.value.length > 0);
+                  }}
+                  onBlur={() => handleTyping(false)}
+                  placeholder="Type your message..."
+                  className="flex-1 bg-gray-100 border-none rounded-full px-4 py-2 text-sm focus:ring-2 focus:ring-pex-blue/20 outline-none"
+                />
+                <Button type="submit" size="icon" className="bg-pex-blue hover:bg-pex-blue/90 text-white rounded-full h-9 w-9 shrink-0">
+                  <Send size={16} />
+                </Button>
+              </form>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <Button
+          onClick={() => {
+            if (!user) {
+              signIn();
+            } else {
+              setIsChatOpen(!isChatOpen);
+            }
+          }}
+          className="w-14 h-14 rounded-full bg-pex-blue hover:bg-pex-blue/90 text-white shadow-2xl flex items-center justify-center p-0"
+        >
+          {isChatOpen ? <X size={24} /> : <MessageCircle size={24} />}
+        </Button>
       </div>
     </div>
   );

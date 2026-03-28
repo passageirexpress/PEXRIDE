@@ -1,11 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
+import { Label } from '@/components/ui/label';
+import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Bell, Send, Car, UserPlus, X } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { useFirebase } from '../FirebaseProvider';
+import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, limit, addDoc, serverTimestamp, setDoc, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
+import { motion, AnimatePresence } from 'motion/react';
+import { socket } from '../lib/socket';
 
 const revenueData = [
   { name: 'Mon', revenue: 4000 },
@@ -17,17 +23,397 @@ const revenueData = [
   { name: 'Sun', revenue: 3490 },
 ];
 
-const activeRides = [
-  { id: 'R-1042', driver: 'Carlos Silva', status: 'In Progress', type: 'Experience', eta: '15 min', vehicle: 'Mercedes S-Class' },
-  { id: 'R-1043', driver: 'Ana Costa', status: 'Waiting', type: 'Transfer', eta: '5 min', vehicle: 'Mercedes V-Class' },
-  { id: 'R-1044', driver: 'João Santos', status: 'Delayed', type: 'Experience', eta: '45 min', vehicle: 'BMW 7 Series' },
-];
+interface Ride {
+  id: string;
+  passengerId: string;
+  passengerName?: string;
+  driverId?: string;
+  pickupLocation: string;
+  dropoffLocation: string;
+  status: 'requested' | 'assigned' | 'in-progress' | 'completed' | 'cancelled';
+  rideType: string;
+  vehicleName?: string;
+  price: number;
+  createdAt: any;
+}
+
+interface DriverLocation {
+  id: string;
+  driverId: string;
+  driverName: string;
+  lat: number;
+  lng: number;
+  status: 'available' | 'busy' | 'offline';
+  updatedAt: string;
+}
+
+interface Vehicle {
+  id: string;
+  make: string;
+  model: string;
+  type: string;
+  licensePlate: string;
+  capacity: number;
+  status: 'active' | 'maintenance' | 'retired';
+}
+
+interface POI {
+  id: string;
+  name: string;
+  price: number;
+  duration: string;
+  image_url: string;
+  status: string;
+}
+
+interface UserProfile {
+  id: string;
+  uid: string;
+  email: string;
+  displayName: string;
+  role: 'passenger' | 'driver' | 'admin';
+  photoURL?: string;
+}
 
 export default function AdminDashboard() {
+  const { profile, user: currentUser } = useFirebase();
   const [activeTab, setActiveTab] = useState('live-map');
+  const [rides, setRides] = useState<Ride[]>([]);
+  const [driverLocations, setDriverLocations] = useState<DriverLocation[]>([]);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [pois, setPois] = useState<POI[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  
+  // Support Chat States
+  const [chats, setChats] = useState<UserProfile[]>([]);
+  const [selectedChat, setSelectedChat] = useState<UserProfile | null>(null);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Vehicle Management States
+  const [isAddingVehicle, setIsAddingVehicle] = useState(false);
+  const [newVehicle, setNewVehicle] = useState({ make: '', model: '', type: 'Business', licensePlate: '', capacity: 4 });
+
+  // POI Management States
+  const [isAddingPOI, setIsAddingPOI] = useState(false);
+  const [newPOI, setNewPOI] = useState({ name: '', price: 0, duration: '', imageUrl: '', status: 'Active' });
+
+  // Driver Registration States
+  const [newDriver, setNewDriver] = useState({ displayName: '', email: '', phoneNumber: '' });
+  
+  // Filtering & History States
+  const [driverStatusFilter, setDriverStatusFilter] = useState<'all' | 'available' | 'busy' | 'offline'>('all');
+  const [showHistory, setShowHistory] = useState<string | null>(null);
+  const [historyData, setHistoryData] = useState<{lat: number, lng: number}[]>([]);
+  const [typingUsers, setTypingUsers] = useState<{[key: string]: boolean}>({});
+
+  useEffect(() => {
+    if (profile?.role !== 'admin') return;
+
+    const fetchData = async () => {
+      try {
+        const [ridesRes, locationsRes, vehiclesRes, passengersRes, poisRes] = await Promise.all([
+          fetch('/api/rides'),
+          fetch('/api/driver-locations'),
+          fetch('/api/vehicles'),
+          fetch('/api/users/passengers'),
+          fetch('/api/pois')
+        ]);
+
+        const [ridesData, locationsData, vehiclesData, passengersData, poisData] = await Promise.all([
+          ridesRes.json(),
+          locationsRes.json(),
+          vehiclesRes.json(),
+          passengersRes.json(),
+          poisRes.json()
+        ]);
+
+        setRides(ridesData);
+        setDriverLocations(locationsData);
+        setVehicles(vehiclesData);
+        setChats(passengersData);
+        setPois(poisData);
+        setLoading(false);
+      } catch (err) {
+        console.error('Error fetching dashboard data:', err);
+      }
+    };
+
+    fetchData();
+
+    // Socket listeners
+    socket.on('ride:requested', (ride: Ride) => {
+      setRides(prev => [ride, ...prev].slice(0, 50));
+      addNotification(`New ride request from ${ride.passengerName || 'Anonymous'}`, 'info');
+    });
+
+    socket.on('ride:updated', (updatedRide: Ride) => {
+      setRides(prev => prev.map(r => r.id === updatedRide.id ? updatedRide : r));
+    });
+
+    socket.on('ride:deleted', (id: string) => {
+      setRides(prev => prev.filter(r => r.id === id));
+    });
+
+    socket.on('driver:location_updated', (location: DriverLocation) => {
+      setDriverLocations(prev => {
+        const index = prev.findIndex(l => l.driverId === location.driverId);
+        if (index !== -1) {
+          const oldLoc = prev[index];
+          if (oldLoc.status !== location.status) {
+            addNotification(`Driver ${location.driverName} is now ${location.status}`, 'info');
+          }
+          const newLocs = [...prev];
+          newLocs[index] = location;
+          return newLocs;
+        }
+        return [...prev, location];
+      });
+    });
+
+    socket.on('vehicle:added', (vehicle: Vehicle) => {
+      setVehicles(prev => [vehicle, ...prev]);
+    });
+
+    socket.on('vehicle:deleted', (id: string) => {
+      setVehicles(prev => prev.filter(v => v.id !== id));
+    });
+
+    socket.on('chat:typing', (data: { chatId: string, isTyping: boolean }) => {
+      setTypingUsers(prev => ({ ...prev, [data.chatId]: data.isTyping }));
+    });
+
+    return () => {
+      socket.off('ride:requested');
+      socket.off('driver:location_updated');
+      socket.off('vehicle:added');
+      socket.off('vehicle:deleted');
+    };
+  }, [profile]);
+
+  useEffect(() => {
+    if (selectedChat) {
+      const fetchMessages = async () => {
+        try {
+          const res = await fetch(`/api/chats/${selectedChat.uid}/messages`);
+          const data = await res.json();
+          setMessages(data);
+        } catch (err) {
+          console.error('Error fetching messages:', err);
+        }
+      };
+
+      fetchMessages();
+      socket.emit('join:chat', selectedChat.uid);
+
+      socket.on('chat:message', (message: any) => {
+        if (message.chat_id === selectedChat.uid) {
+          setMessages(prev => [...prev, message]);
+          // Simulate read receipt
+          if (message.sender_id !== currentUser?.uid) {
+            // In a real app, we'd send a 'chat:read' event
+          }
+        }
+      });
+
+      return () => {
+        socket.off('chat:message');
+      };
+    }
+  }, [selectedChat, currentUser]);
+
+  const handleTyping = (isTyping: boolean) => {
+    if (selectedChat && currentUser) {
+      socket.emit('chat:typing', { chatId: selectedChat.uid, isTyping });
+    }
+  };
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const addNotification = (message: string, type: 'info' | 'success' | 'warning') => {
+    const id = Date.now();
+    setNotifications(prev => [{ id, message, type }, ...prev].slice(0, 5));
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 5000);
+  };
+
+  const updateRideStatus = async (rideId: string, newStatus: string, driverId?: string) => {
+    try {
+      await fetch(`/api/rides/${rideId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus, driverId }),
+      });
+      addNotification(`Ride ${rideId} updated to ${newStatus}`, 'success');
+    } catch (error) {
+      console.error('Error updating ride status:', error);
+    }
+  };
+
+  const fetchDriverHistory = async (driverId: string) => {
+    if (showHistory === driverId) {
+      setShowHistory(null);
+      setHistoryData([]);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/driver-locations/${driverId}/history`);
+      const data = await res.json();
+      setHistoryData(data);
+      setShowHistory(driverId);
+    } catch (err) {
+      console.error('Error fetching driver history:', err);
+    }
+  };
+
+  const deleteRide = async (rideId: string) => {
+    if (!window.confirm('Are you sure you want to delete this ride record?')) return;
+    try {
+      await fetch(`/api/rides/${rideId}`, { method: 'DELETE' });
+      addNotification(`Ride ${rideId} deleted`, 'warning');
+    } catch (error) {
+      console.error('Error deleting ride:', error);
+    }
+  };
+
+  const sendMessage = async () => {
+    if (!newMessage.trim() || !selectedChat || !currentUser) return;
+    try {
+      await fetch(`/api/chats/${selectedChat.uid}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderId: currentUser.uid,
+          senderName: profile?.displayName || 'Admin',
+          text: newMessage,
+        }),
+      });
+      setNewMessage('');
+    } catch (error) {
+      console.error('Error sending message:', error);
+    }
+  };
+
+  const handleAddVehicle = async () => {
+    try {
+      await fetch('/api/vehicles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newVehicle),
+      });
+      setIsAddingVehicle(false);
+      setNewVehicle({ make: '', model: '', type: 'Business', licensePlate: '', capacity: 4 });
+      addNotification('Vehicle added successfully', 'success');
+    } catch (error) {
+      console.error('Error adding vehicle:', error);
+    }
+  };
+
+  const handleDeleteVehicle = async (id: string) => {
+    if (!window.confirm('Delete this vehicle?')) return;
+    try {
+      await fetch(`/api/vehicles/${id}`, { method: 'DELETE' });
+      addNotification('Vehicle deleted', 'warning');
+    } catch (error) {
+      console.error('Error deleting vehicle:', error);
+    }
+  };
+
+  const handleRegisterDriver = async () => {
+    try {
+      const driverId = `driver_${Date.now()}`;
+      await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: driverId,
+          displayName: newDriver.displayName,
+          email: newDriver.email,
+          role: 'driver',
+        }),
+      });
+      setNewDriver({ displayName: '', email: '', phoneNumber: '' });
+      addNotification('Driver registered successfully', 'success');
+    } catch (error) {
+      console.error('Error registering driver:', error);
+    }
+  };
+
+  const handleAddPOI = async () => {
+    try {
+      const res = await fetch('/api/pois', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newPOI),
+      });
+      const data = await res.json();
+      setPois(prev => [data, ...prev]);
+      setIsAddingPOI(false);
+      setNewPOI({ name: '', price: 0, duration: '', imageUrl: '', status: 'Active' });
+      addNotification('POI added successfully', 'success');
+    } catch (error) {
+      console.error('Error adding POI:', error);
+    }
+  };
+
+  const handleDeletePOI = async (id: string) => {
+    if (!window.confirm('Delete this POI?')) return;
+    try {
+      await fetch(`/api/pois/${id}`, { method: 'DELETE' });
+      setPois(prev => prev.filter(p => p.id !== id));
+      addNotification('POI deleted', 'warning');
+    } catch (error) {
+      console.error('Error deleting POI:', error);
+    }
+  };
+
+  if (profile?.role !== 'admin') {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-100 p-6">
+        <Card className="max-w-md w-full p-8 text-center space-y-4">
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto">
+            <ShieldCheck size={32} className="text-red-600" />
+          </div>
+          <h2 className="text-2xl font-bold text-pex-blue">Access Denied</h2>
+          <p className="text-gray-600">You do not have administrative privileges to access this dashboard.</p>
+        </Card>
+      </div>
+    );
+  }
+
+  const totalRevenue = rides
+    .filter(r => r.status === 'completed')
+    .reduce((sum, r) => sum + (r.price || 0), 0);
 
   return (
-    <div className="flex-1 flex flex-col md:flex-row bg-gray-100 overflow-hidden">
+    <div className="flex-1 flex flex-col md:flex-row bg-gray-100 overflow-hidden relative">
+      {/* Notifications Overlay */}
+      <div className="fixed top-20 right-4 z-[100] space-y-2 pointer-events-none">
+        <AnimatePresence>
+          {notifications.map((n) => (
+            <motion.div
+              key={n.id}
+              initial={{ opacity: 0, x: 50 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 50 }}
+              className={`p-4 rounded-lg shadow-lg flex items-center gap-3 pointer-events-auto min-w-[300px] ${
+                n.type === 'success' ? 'bg-green-600' : n.type === 'warning' ? 'bg-red-600' : 'bg-pex-blue'
+              } text-white`}
+            >
+              <Bell size={18} />
+              <span className="text-sm font-medium">{n.message}</span>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+
       {/* Sidebar */}
       <div className="w-full md:w-64 bg-pex-blue text-white flex flex-col">
         <div className="p-6">
@@ -51,8 +437,15 @@ export default function AdminDashboard() {
               onClick={() => setActiveTab('drivers')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'drivers' ? 'bg-white/10 text-pex-gold' : 'hover:bg-white/5'}`}
             >
-              <Users size={18} />
-              <span className="text-sm font-medium">Driver Onboarding</span>
+              <UserPlus size={18} />
+              <span className="text-sm font-medium">Drivers</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('fleet')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'fleet' ? 'bg-white/10 text-pex-gold' : 'hover:bg-white/5'}`}
+            >
+              <Car size={18} />
+              <span className="text-sm font-medium">Fleet Management</span>
             </button>
             <button 
               onClick={() => setActiveTab('financial')}
@@ -79,7 +472,17 @@ export default function AdminDashboard() {
             <div className="flex justify-between items-center">
               <h1 className="text-2xl font-bold text-pex-blue">Live Fleet Tracking</h1>
               <div className="flex gap-2">
-                <Button variant="outline" className="bg-white"><Filter size={16} className="mr-2" /> Filters</Button>
+                <div className="flex bg-white rounded-lg border p-1">
+                  {(['all', 'available', 'busy', 'offline'] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setDriverStatusFilter(s)}
+                      className={`px-3 py-1 text-xs rounded-md transition-colors ${driverStatusFilter === s ? 'bg-pex-blue text-white' : 'hover:bg-gray-100 text-gray-600'}`}
+                    >
+                      {s.charAt(0).toUpperCase() + s.slice(1)}
+                    </button>
+                  ))}
+                </div>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
                   <Input placeholder="Search driver or ride ID..." className="pl-10 w-64 bg-white" />
@@ -89,48 +492,356 @@ export default function AdminDashboard() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Map Placeholder */}
-              <Card className="lg:col-span-2 h-[500px] relative overflow-hidden">
-                <div className="absolute inset-0 opacity-60" style={{
+              <Card className="lg:col-span-2 h-[600px] relative overflow-hidden bg-gray-200">
+                <div className="absolute inset-0 opacity-40" style={{
                   backgroundImage: 'url("https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&q=80&w=2000&h=2000")',
                   backgroundSize: 'cover',
                   backgroundPosition: 'center',
                   filter: 'grayscale(80%)'
                 }} />
-                <div className="absolute inset-0 bg-pex-blue/5" />
                 
-                {/* Simulated Markers */}
-                <div className="absolute top-1/4 left-1/3 w-4 h-4 rounded-full bg-green-500 border-2 border-white shadow-lg animate-pulse" />
-                <div className="absolute top-1/2 left-1/2 w-4 h-4 rounded-full bg-yellow-500 border-2 border-white shadow-lg animate-pulse" />
-                <div className="absolute bottom-1/3 right-1/4 w-4 h-4 rounded-full bg-red-500 border-2 border-white shadow-lg animate-pulse" />
+                {/* Real-time Driver Markers */}
+                {driverLocations
+                  .filter(loc => driverStatusFilter === 'all' || loc.status === driverStatusFilter)
+                  .map((loc) => (
+                  <motion.div
+                    key={loc.id}
+                    initial={false}
+                    animate={{ left: `${loc.lng}%`, top: `${loc.lat}%` }}
+                    className="absolute -translate-x-1/2 -translate-y-1/2 group cursor-pointer"
+                    onClick={() => fetchDriverHistory(loc.driverId)}
+                  >
+                    <div className={`w-6 h-6 rounded-full border-2 border-white shadow-xl flex items-center justify-center ${
+                      loc.status === 'available' ? 'bg-green-500' : loc.status === 'busy' ? 'bg-yellow-500' : 'bg-gray-500'
+                    }`}>
+                      <Car size={12} className="text-white" />
+                    </div>
+                    
+                    {/* Tooltip */}
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-pex-blue text-white p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                      <p className="font-bold text-xs mb-1">{loc.driverName}</p>
+                      <div className="flex justify-between items-center text-[10px] opacity-80">
+                        <span>Status: {loc.status}</span>
+                        <span>Updated: {new Date(loc.updatedAt).toLocaleTimeString()}</span>
+                      </div>
+                      <p className="text-[8px] mt-1 text-pex-gold">Click to toggle movement history</p>
+                    </div>
+                  </motion.div>
+                ))}
+
+                {/* Driver History Path */}
+                {showHistory && historyData.map((point, idx) => (
+                  <div 
+                    key={idx}
+                    className="absolute w-1.5 h-1.5 bg-pex-gold/40 rounded-full -translate-x-1/2 -translate-y-1/2"
+                    style={{ left: `${point.lng}%`, top: `${point.lat}%` }}
+                  />
+                ))}
+
+                {/* Ride Markers */}
+                {rides.filter(r => r.status === 'requested').map((ride, idx) => (
+                  <div 
+                    key={ride.id}
+                    className="absolute w-4 h-4 bg-red-500 rounded-full border-2 border-white shadow-lg animate-bounce group cursor-pointer"
+                    style={{ left: `${20 + idx * 15}%`, top: `${30 + idx * 10}%` }}
+                  >
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-red-600 text-white text-[8px] px-2 py-0.5 rounded whitespace-nowrap">
+                      New Request
+                    </div>
+                    
+                    {/* Tooltip */}
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-48 bg-white text-pex-blue p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-red-100">
+                      <p className="font-bold text-xs mb-1">Ride Request</p>
+                      <p className="text-[10px] text-gray-500 mb-1">From: {ride.pickupLocation}</p>
+                      <p className="text-[10px] text-gray-500 mb-2">To: {ride.dropoffLocation}</p>
+                      <div className="flex justify-between items-center text-[10px] font-bold text-pex-gold">
+                        <span>€{ride.price}</span>
+                        <span>{ride.rideType}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </Card>
 
               {/* Active Rides List */}
-              <Card className="h-[500px] flex flex-col">
+              <Card className="h-[600px] flex flex-col">
                 <CardHeader className="pb-3 border-b border-gray-100">
-                  <CardTitle className="text-lg">Active Rides</CardTitle>
+                  <CardTitle className="text-lg">Recent Rides ({rides.length})</CardTitle>
                 </CardHeader>
                 <CardContent className="flex-1 overflow-y-auto p-0">
                   <div className="divide-y divide-gray-100">
-                    {activeRides.map((ride) => (
-                      <div key={ride.id} className="p-4 hover:bg-gray-50 transition-colors cursor-pointer">
-                        <div className="flex justify-between items-start mb-2">
-                          <span className="font-bold text-pex-blue">{ride.id}</span>
-                          <Badge variant={ride.status === 'In Progress' ? 'default' : ride.status === 'Waiting' ? 'secondary' : 'destructive'} 
-                                 className={ride.status === 'In Progress' ? 'bg-green-100 text-green-800 hover:bg-green-200' : ''}>
-                            {ride.status}
-                          </Badge>
+                    {rides.length === 0 ? (
+                      <div className="p-8 text-center text-gray-400">No rides found</div>
+                    ) : (
+                      rides.map((ride) => (
+                        <div key={ride.id} className="p-4 hover:bg-gray-50 transition-colors group">
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="font-bold text-pex-blue text-xs uppercase tracking-tighter">ID: {ride.id.slice(0, 8)}</span>
+                            <div className="flex gap-1">
+                              <Badge variant={ride.status === 'completed' ? 'default' : ride.status === 'requested' ? 'secondary' : 'destructive'} 
+                                     className={ride.status === 'completed' ? 'bg-green-100 text-green-800 hover:bg-green-200' : ''}>
+                                {ride.status}
+                              </Badge>
+                              <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deleteRide(ride.id)}>
+                                <Trash2 size={12} className="text-red-500" />
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="text-sm text-gray-600 space-y-1">
+                            <p className="flex items-center gap-2 font-medium text-pex-blue"><Users size={14} /> {ride.passengerName || 'Anonymous'}</p>
+                            <p className="flex items-center gap-2"><Map size={14} /> {ride.rideType} - {ride.vehicleName}</p>
+                            <p className="flex items-center justify-between">
+                              <span className="flex items-center gap-2"><DollarSign size={14} /> €{ride.price}</span>
+                              <span className="text-[10px] text-gray-400">{ride.createdAt?.toDate ? ride.createdAt.toDate().toLocaleTimeString() : 'Just now'}</span>
+                            </p>
+                          </div>
+                          <div className="mt-3 space-y-2">
+                            <div className="flex gap-2">
+                              <select 
+                                className="flex-1 h-7 text-[10px] rounded-md border border-input bg-background px-2"
+                                value={ride.status}
+                                onChange={(e) => updateRideStatus(ride.id, e.target.value)}
+                              >
+                                <option value="requested">Requested</option>
+                                <option value="assigned">Assigned</option>
+                                <option value="in-progress">In Progress</option>
+                                <option value="completed">Completed</option>
+                                <option value="cancelled">Cancelled</option>
+                              </select>
+                              
+                              {ride.status === 'requested' && (
+                                <select 
+                                  className="flex-1 h-7 text-[10px] rounded-md border border-input bg-background px-2"
+                                  onChange={(e) => updateRideStatus(ride.id, 'assigned', e.target.value)}
+                                  defaultValue=""
+                                >
+                                  <option value="" disabled>Assign Driver</option>
+                                  {driverLocations
+                                    .filter(d => d.status === 'available')
+                                    .map(d => (
+                                      <option key={d.driverId} value={d.driverId}>{d.driverName}</option>
+                                    ))
+                                  }
+                                </select>
+                              )}
+                            </div>
+                            
+                            {ride.status === 'requested' && (
+                              <div className="flex gap-2">
+                                <Button size="sm" className="flex-1 h-7 text-[10px] bg-green-600 hover:bg-green-700 text-white" onClick={() => updateRideStatus(ride.id, 'assigned')}>Quick Assign</Button>
+                                <Button size="sm" variant="outline" className="flex-1 h-7 text-[10px]" onClick={() => updateRideStatus(ride.id, 'cancelled')}>Cancel</Button>
+                              </div>
+                            )}
+                            {ride.status === 'assigned' && (
+                              <Button size="sm" className="w-full h-7 text-[10px] bg-pex-blue hover:bg-pex-blue/90 text-white" onClick={() => updateRideStatus(ride.id, 'completed')}>Mark Completed</Button>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-sm text-gray-600 space-y-1">
-                          <p className="flex items-center gap-2"><Users size={14} /> {ride.driver}</p>
-                          <p className="flex items-center gap-2"><Map size={14} /> {ride.type}</p>
-                          <p className="flex items-center gap-2"><Clock size={14} /> ETA: {ride.eta}</p>
-                        </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </CardContent>
               </Card>
             </div>
+          </div>
+        )}
+
+        {activeTab === 'fleet' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h1 className="text-2xl font-bold text-pex-blue">Fleet Management</h1>
+              <Button className="bg-pex-blue text-white" onClick={() => setIsAddingVehicle(true)}>
+                <Plus size={16} className="mr-2" /> Add Vehicle
+              </Button>
+            </div>
+
+            {isAddingVehicle && (
+              <Card className="p-6 bg-white border-pex-gold/30">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-pex-blue">New Vehicle Details</h3>
+                  <Button variant="ghost" size="icon" onClick={() => setIsAddingVehicle(false)}><X size={18} /></Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Make</Label>
+                    <Input value={newVehicle.make} onChange={e => setNewVehicle({...newVehicle, make: e.target.value})} placeholder="e.g. Mercedes-Benz" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Model</Label>
+                    <Input value={newVehicle.model} onChange={e => setNewVehicle({...newVehicle, model: e.target.value})} placeholder="e.g. S-Class" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>License Plate</Label>
+                    <Input value={newVehicle.licensePlate} onChange={e => setNewVehicle({...newVehicle, licensePlate: e.target.value})} placeholder="ABC-1234" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Type</Label>
+                    <select className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm" value={newVehicle.type} onChange={e => setNewVehicle({...newVehicle, type: e.target.value})}>
+                      <option>Business</option>
+                      <option>First Class</option>
+                      <option>SUV</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Capacity</Label>
+                    <Input type="number" value={newVehicle.capacity} onChange={e => setNewVehicle({...newVehicle, capacity: parseInt(e.target.value)})} />
+                  </div>
+                  <div className="flex items-end">
+                    <Button className="w-full bg-pex-gold text-pex-blue font-bold" onClick={handleAddVehicle}>Save Vehicle</Button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {vehicles.map((v) => (
+                <Card key={v.id} className="overflow-hidden">
+                  <div className="p-6">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="font-bold text-lg text-pex-blue">{v.make} {v.model}</h3>
+                        <p className="text-xs text-gray-500 font-mono">{v.licensePlate}</p>
+                      </div>
+                      <Badge className={v.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}>
+                        {v.status}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                      <div className="text-gray-500">Type: <span className="text-pex-blue font-medium">{v.type}</span></div>
+                      <div className="text-gray-500">Capacity: <span className="text-pex-blue font-medium">{v.capacity} pax</span></div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" className="flex-1">Edit</Button>
+                      <Button variant="outline" size="sm" className="text-red-500 hover:bg-red-50" onClick={() => handleDeleteVehicle(v.id)}>Delete</Button>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'drivers' && (
+          <div className="space-y-6 max-w-2xl mx-auto">
+            <h1 className="text-2xl font-bold text-pex-blue">Driver Onboarding</h1>
+            <Card className="p-8">
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 gap-4">
+                  <div className="space-y-2">
+                    <Label>Full Name</Label>
+                    <Input value={newDriver.displayName} onChange={e => setNewDriver({...newDriver, displayName: e.target.value})} placeholder="John Doe" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Email Address</Label>
+                    <Input type="email" value={newDriver.email} onChange={e => setNewDriver({...newDriver, email: e.target.value})} placeholder="john@example.com" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Phone Number</Label>
+                    <Input value={newDriver.phoneNumber} onChange={e => setNewDriver({...newDriver, phoneNumber: e.target.value})} placeholder="+351 912 345 678" />
+                  </div>
+                </div>
+                <div className="pt-4">
+                  <Button className="w-full bg-pex-blue text-white h-12 text-lg" onClick={handleRegisterDriver}>
+                    Register Driver
+                  </Button>
+                  <p className="text-xs text-gray-400 text-center mt-4">
+                    This will create a driver profile. The driver will receive an email to set their password.
+                  </p>
+                </div>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === 'support' && (
+          <div className="h-[calc(100vh-160px)] flex gap-6">
+            {/* Chat List */}
+            <Card className="w-80 flex flex-col">
+              <CardHeader className="border-b">
+                <CardTitle className="text-lg">Active Chats</CardTitle>
+              </CardHeader>
+              <div className="flex-1 overflow-y-auto">
+                {chats.map(chat => (
+                  <div 
+                    key={chat.id} 
+                    onClick={() => setSelectedChat(chat)}
+                    className={`p-4 border-b cursor-pointer transition-colors ${selectedChat?.id === chat.id ? 'bg-pex-blue/5 border-l-4 border-l-pex-gold' : 'hover:bg-gray-50'}`}
+                  >
+                    <p className="font-bold text-pex-blue text-sm">{chat.displayName || 'Anonymous User'}</p>
+                    <p className="text-xs text-gray-500 truncate">{chat.email}</p>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            {/* Chat Window */}
+            <Card className="flex-1 flex flex-col">
+              {selectedChat ? (
+                <>
+                  <CardHeader className="border-b flex flex-row items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg">{selectedChat.displayName}</CardTitle>
+                      <p className="text-xs text-gray-400">Support Session: {selectedChat.id}</p>
+                    </div>
+                    <Badge className="bg-green-500">Live</Badge>
+                  </CardHeader>
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50">
+                      {messages.map((msg) => (
+                        <div key={msg.id} className={`flex ${msg.sender_id === currentUser?.uid ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[70%] p-3 rounded-2xl shadow-sm ${
+                            msg.sender_id === currentUser?.uid ? 'bg-pex-blue text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none'
+                          }`}>
+                            <p className="text-sm">{msg.text}</p>
+                            <div className={`flex items-center justify-between gap-4 mt-1 ${msg.sender_id === currentUser?.uid ? 'text-white/60' : 'text-gray-400'}`}>
+                              <p className="text-[10px]">
+                                {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                              {msg.sender_id === currentUser?.uid && (
+                                <CheckCircle2 size={10} className="text-pex-gold" />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {typingUsers[selectedChat.uid] && (
+                        <div className="flex justify-start">
+                          <div className="bg-white text-gray-400 p-2 rounded-2xl rounded-tl-none shadow-sm text-[10px] italic flex items-center gap-2">
+                            <div className="flex gap-1">
+                              <span className="w-1 h-1 bg-gray-300 rounded-full animate-bounce" />
+                              <span className="w-1 h-1 bg-gray-300 rounded-full animate-bounce [animation-delay:0.2s]" />
+                              <span className="w-1 h-1 bg-gray-300 rounded-full animate-bounce [animation-delay:0.4s]" />
+                            </div>
+                            {selectedChat.displayName} is typing...
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-4 border-t bg-white">
+                      <div className="flex gap-2">
+                        <Input 
+                          value={newMessage} 
+                          onChange={e => {
+                            setNewMessage(e.target.value);
+                            handleTyping(e.target.value.length > 0);
+                          }}
+                          onBlur={() => handleTyping(false)}
+                          onKeyPress={e => e.key === 'Enter' && sendMessage()}
+                          placeholder="Type your message..." 
+                          className="flex-1"
+                        />
+                        <Button onClick={sendMessage} className="bg-pex-blue text-white">
+                          <Send size={18} />
+                        </Button>
+                      </div>
+                    </div>
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-gray-400">
+                  <MessageSquare size={48} className="mb-4 opacity-20" />
+                  <p>Select a chat to start messaging</p>
+                </div>
+              )}
+            </Card>
           </div>
         )}
 
@@ -141,22 +852,22 @@ export default function AdminDashboard() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <Card>
                 <CardContent className="p-6">
-                  <p className="text-sm text-gray-500 uppercase tracking-wider font-semibold mb-1">Total Revenue (Week)</p>
-                  <p className="text-3xl font-bold text-pex-blue">€19,550</p>
-                  <p className="text-sm text-green-600 mt-2 flex items-center gap-1"><CheckCircle2 size={14} /> +12% vs last week</p>
+                  <p className="text-sm text-gray-500 uppercase tracking-wider font-semibold mb-1">Real-time Revenue</p>
+                  <p className="text-3xl font-bold text-pex-blue">€{totalRevenue.toLocaleString()}</p>
+                  <p className="text-sm text-green-600 mt-2 flex items-center gap-1"><CheckCircle2 size={14} /> From completed rides</p>
                 </CardContent>
               </Card>
               <Card>
                 <CardContent className="p-6">
                   <p className="text-sm text-gray-500 uppercase tracking-wider font-semibold mb-1">Driver Commissions</p>
-                  <p className="text-3xl font-bold text-pex-blue">€13,685</p>
+                  <p className="text-3xl font-bold text-pex-blue">€{(totalRevenue * 0.7).toLocaleString()}</p>
                   <p className="text-sm text-gray-500 mt-2">70% average split</p>
                 </CardContent>
               </Card>
               <Card>
                 <CardContent className="p-6">
-                  <p className="text-sm text-gray-500 uppercase tracking-wider font-semibold mb-1">Corporate B2B</p>
-                  <p className="text-3xl font-bold text-pex-blue">€5,865</p>
+                  <p className="text-sm text-gray-500 uppercase tracking-wider font-semibold mb-1">Net Profit</p>
+                  <p className="text-3xl font-bold text-pex-blue">€{(totalRevenue * 0.3).toLocaleString()}</p>
                   <p className="text-sm text-pex-gold mt-2">30% of total revenue</p>
                 </CardContent>
               </Card>
@@ -164,7 +875,7 @@ export default function AdminDashboard() {
 
             <Card className="h-[400px]">
               <CardHeader>
-                <CardTitle>Revenue Trend</CardTitle>
+                <CardTitle>Revenue Trend (Mockup)</CardTitle>
               </CardHeader>
               <CardContent className="h-[300px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -188,19 +899,46 @@ export default function AdminDashboard() {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h1 className="text-2xl font-bold text-pex-blue">POI Manager</h1>
-              <Button className="bg-pex-blue hover:bg-pex-blue/90 text-white"><Plus size={16} className="mr-2" /> Add New POI</Button>
+              <Button className="bg-pex-blue hover:bg-pex-blue/90 text-white" onClick={() => setIsAddingPOI(true)}>
+                <Plus size={16} className="mr-2" /> Add New POI
+              </Button>
             </div>
 
+            {isAddingPOI && (
+              <Card className="p-6 bg-white border-pex-gold/30">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-pex-blue">New POI Details</h3>
+                  <Button variant="ghost" size="icon" onClick={() => setIsAddingPOI(false)}><X size={18} /></Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Name</Label>
+                    <Input value={newPOI.name} onChange={e => setNewPOI({...newPOI, name: e.target.value})} placeholder="e.g. Óbidos Castle" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Price (€)</Label>
+                    <Input type="number" value={newPOI.price} onChange={e => setNewPOI({...newPOI, price: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Duration</Label>
+                    <Input value={newPOI.duration} onChange={e => setNewPOI({...newPOI, duration: e.target.value})} placeholder="e.g. +1.5 hrs" />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label>Image URL</Label>
+                    <Input value={newPOI.imageUrl} onChange={e => setNewPOI({...newPOI, imageUrl: e.target.value})} placeholder="https://..." />
+                  </div>
+                  <div className="flex items-end">
+                    <Button className="w-full bg-pex-gold text-pex-blue font-bold" onClick={handleAddPOI}>Save POI</Button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {[
-                { name: 'Óbidos Castle', price: '€45', duration: '+1.5 hrs', status: 'Active' },
-                { name: 'Nazaré Waves', price: '€60', duration: '+2.0 hrs', status: 'Active' },
-                { name: 'Sintra Palaces', price: '€80', duration: '+3.0 hrs', status: 'Active' },
-                { name: 'Fátima Sanctuary', price: '€50', duration: '+1.5 hrs', status: 'Review' },
-              ].map((poi, i) => (
-                <Card key={i} className="overflow-hidden">
+              {pois.map((poi) => (
+                <Card key={poi.id} className="overflow-hidden">
                   <div className="h-32 bg-gray-200 relative">
-                    <img src={`https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&q=80&w=400&h=200&sig=${i}`} alt={poi.name} className="object-cover w-full h-full" />
+                    <img src={poi.image_url || `https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&q=80&w=400&h=200&sig=${poi.id}`} alt={poi.name} className="object-cover w-full h-full" referrerPolicy="no-referrer" />
                     <div className="absolute top-2 right-2">
                       <Badge variant={poi.status === 'Active' ? 'default' : 'secondary'} className={poi.status === 'Active' ? 'bg-green-500 hover:bg-green-600' : ''}>
                         {poi.status}
@@ -210,30 +948,19 @@ export default function AdminDashboard() {
                   <CardContent className="p-4">
                     <div className="flex justify-between items-start mb-2">
                       <h3 className="font-bold text-lg text-pex-blue">{poi.name}</h3>
-                      <Button variant="ghost" size="icon" className="h-8 w-8"><MoreVertical size={16} /></Button>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:bg-red-50" onClick={() => handleDeletePOI(poi.id)}>
+                          <Trash2 size={16} />
+                        </Button>
+                      </div>
                     </div>
                     <div className="flex items-center justify-between text-sm text-gray-500">
                       <span className="flex items-center gap-1"><Clock size={14} /> {poi.duration}</span>
-                      <span className="font-bold text-pex-gold">{poi.price}</span>
+                      <span className="font-bold text-pex-gold">€{poi.price}</span>
                     </div>
                   </CardContent>
                 </Card>
               ))}
-            </div>
-          </div>
-        )}
-
-        {/* Placeholders for other tabs */}
-        {(activeTab === 'drivers' || activeTab === 'support') && (
-          <div className="flex flex-col items-center justify-center h-[60vh] text-center">
-            <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100 max-w-md">
-              <div className="w-16 h-16 bg-pex-gold/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Clock size={32} className="text-pex-gold" />
-              </div>
-              <h2 className="text-xl font-bold text-pex-blue mb-2">Module in Development</h2>
-              <p className="text-gray-500">
-                The {activeTab.replace('-', ' ')} module is scheduled for Phase {activeTab === 'drivers' ? '2' : '3'} of the roadmap.
-              </p>
             </div>
           </div>
         )}
