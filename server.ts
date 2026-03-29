@@ -55,6 +55,7 @@ async function startServer() {
         email TEXT,
         display_name TEXT,
         role TEXT DEFAULT 'passenger',
+        status TEXT DEFAULT 'active',
         photo_url TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
@@ -123,12 +124,91 @@ async function startServer() {
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         price NUMERIC NOT NULL,
+        tour_price NUMERIC DEFAULT 0,
         duration TEXT NOT NULL,
         image_url TEXT,
         status TEXT DEFAULT 'Active',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS vehicle_types (
+        id SERIAL PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        base_price NUMERIC DEFAULT 0,
+        multiplier NUMERIC DEFAULT 1.0,
+        capacity INTEGER,
+        description TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+    
+    // Seed initial settings if not exists
+    await sql`
+      INSERT INTO settings (key, value)
+      VALUES ('pricing', '{"normal_price_per_km": 1.5, "base_fare": 5.0}')
+      ON CONFLICT (key) DO NOTHING;
+    `;
+
+    // Seed initial vehicle types
+    await sql`
+      INSERT INTO vehicle_types (name, base_price, multiplier, capacity, description)
+      VALUES 
+        ('Business', 5.0, 1.0, 4, 'Standard luxury sedan'),
+        ('First Class', 10.0, 1.5, 3, 'Premium luxury experience'),
+        ('SUV', 8.0, 1.3, 6, 'Spacious luxury SUV')
+      ON CONFLICT (name) DO NOTHING;
+    `;
+
+    // Seed POIs if empty
+    const { rows: poiCount } = await sql`SELECT count(*) FROM pois`;
+    if (parseInt(poiCount[0].count) === 0) {
+      const initialPois = [
+        // Portugal
+        ['Torre de Belém, Lisbon', 15, 25, '2h', 'https://picsum.photos/seed/belem/800/600'],
+        ['Pena Palace, Sintra', 25, 45, '4h', 'https://picsum.photos/seed/pena/800/600'],
+        ['Ribeira, Porto', 10, 20, '3h', 'https://picsum.photos/seed/porto/800/600'],
+        ['Benagil Cave, Algarve', 35, 60, '3h', 'https://picsum.photos/seed/benagil/800/600'],
+        ['University of Coimbra', 12, 22, '2h', 'https://picsum.photos/seed/coimbra/800/600'],
+        ['Évora Roman Temple', 8, 15, '1.5h', 'https://picsum.photos/seed/evora/800/600'],
+        ['Fatima Sanctuary', 0, 30, '4h', 'https://picsum.photos/seed/fatima/800/600'],
+        ['Óbidos Medieval Village', 0, 25, '3h', 'https://picsum.photos/seed/obidos/800/600'],
+        
+        // France
+        ['Eiffel Tower, Paris', 30, 55, '3h', 'https://picsum.photos/seed/eiffel/800/600'],
+        ['Louvre Museum, Paris', 20, 40, '5h', 'https://picsum.photos/seed/louvre/800/600'],
+        ['Mont Saint-Michel', 15, 35, '4h', 'https://picsum.photos/seed/mont/800/600'],
+        ['Palace of Versailles', 25, 50, '5h', 'https://picsum.photos/seed/versailles/800/600'],
+        ['Promenade des Anglais, Nice', 0, 20, '2h', 'https://picsum.photos/seed/nice/800/600'],
+        ['Carcassonne Fortress', 12, 28, '3h', 'https://picsum.photos/seed/carcassonne/800/600'],
+        ['Chamonix-Mont-Blanc', 50, 90, '6h', 'https://picsum.photos/seed/chamonix/800/600'],
+        ['Verdon Gorge', 0, 45, '5h', 'https://picsum.photos/seed/verdon/800/600'],
+        
+        // Spain
+        ['Sagrada Família, Barcelona', 26, 48, '3h', 'https://picsum.photos/seed/sagrada/800/600'],
+        ['Alhambra, Granada', 18, 38, '4h', 'https://picsum.photos/seed/alhambra/800/600'],
+        ['Prado Museum, Madrid', 15, 30, '4h', 'https://picsum.photos/seed/prado/800/600'],
+        ['Seville Cathedral', 12, 25, '2h', 'https://picsum.photos/seed/seville/800/600'],
+        ['Park Güell, Barcelona', 10, 22, '2h', 'https://picsum.photos/seed/guell/800/600'],
+        ['Guggenheim Museum, Bilbao', 16, 32, '3h', 'https://picsum.photos/seed/bilbao/800/600'],
+        ['Santiago de Compostela Cathedral', 0, 25, '3h', 'https://picsum.photos/seed/santiago/800/600'],
+        ['Toledo Old City', 0, 35, '5h', 'https://picsum.photos/seed/toledo/800/600']
+      ];
+
+      for (const [name, price, tourPrice, duration, imageUrl] of initialPois) {
+        await sql`
+          INSERT INTO pois (name, price, tour_price, duration, image_url)
+          VALUES (${name}, ${price}, ${tourPrice}, ${duration}, ${imageUrl})
+        `;
+      }
+    }
     console.log('Postgres tables initialized');
   } catch (err) {
     console.error('Error initializing Postgres tables:', err);
@@ -162,25 +242,80 @@ async function startServer() {
 
   // User Routes
   app.post('/api/users', async (req, res) => {
-    const { uid, email, displayName, role, photoURL } = req.body;
+    const { uid, email, displayName, role, photoURL, status } = req.body;
     try {
       const { rows } = await sql`
-        INSERT INTO users (uid, email, display_name, role, photo_url)
-        VALUES (${uid}, ${email}, ${displayName}, ${role}, ${photoURL})
+        INSERT INTO users (uid, email, display_name, role, photo_url, status)
+        VALUES (${uid}, ${email}, ${displayName}, ${role}, ${photoURL}, ${status || 'active'})
         ON CONFLICT (uid) DO UPDATE SET
           email = EXCLUDED.email,
           display_name = EXCLUDED.display_name,
-          photo_url = EXCLUDED.photo_url
+          photo_url = EXCLUDED.photo_url,
+          status = COALESCE(EXCLUDED.status, users.status)
         RETURNING 
           id, 
           uid, 
           email, 
           display_name as "displayName", 
           role, 
+          status,
           photo_url as "photoURL", 
           created_at as "createdAt";
       `;
       res.json(rows[0]);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch('/api/users/:uid', async (req, res) => {
+    const { uid } = req.params;
+    const { status, role, displayName } = req.body;
+    try {
+      const { rows } = await sql`
+        UPDATE users 
+        SET 
+          status = COALESCE(${status}, status),
+          role = COALESCE(${role}, role),
+          display_name = COALESCE(${displayName}, display_name)
+        WHERE uid = ${uid}
+        RETURNING 
+          id, 
+          uid, 
+          email, 
+          display_name as "displayName", 
+          role, 
+          status,
+          photo_url as "photoURL", 
+          created_at as "createdAt";
+      `;
+      if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+      const updatedUser = rows[0];
+      io.emit('user:updated', updatedUser);
+      res.json(updatedUser);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/users', async (req, res) => {
+    const { role } = req.query;
+    try {
+      const { rows } = await sql`
+        SELECT 
+          id, 
+          uid, 
+          email, 
+          display_name as "displayName", 
+          role, 
+          status,
+          photo_url as "photoURL", 
+          created_at as "createdAt" 
+        FROM users 
+        WHERE (${role}::text IS NULL OR role = ${role})
+        ORDER BY created_at DESC;
+      `;
+      res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -235,20 +370,27 @@ async function startServer() {
   });
 
   app.get('/api/rides', async (req, res) => {
+    const { passengerId } = req.query;
     try {
       const { rows } = await sql`
         SELECT 
-          id, 
-          passenger_id as "passengerId", 
-          pickup_location as "pickupLocation", 
-          dropoff_location as "dropoffLocation", 
-          status, 
-          ride_type as "rideType", 
-          vehicle_name as "vehicleName", 
-          price, 
-          created_at as "createdAt" 
-        FROM rides 
-        ORDER BY created_at DESC 
+          r.id, 
+          r.passenger_id as "passengerId", 
+          r.passenger_name as "passengerName",
+          r.driver_id as "driverId",
+          u.display_name as "driverName",
+          r.pickup_location as "pickupLocation", 
+          r.dropoff_location as "dropoffLocation", 
+          r.status, 
+          r.ride_type as "rideType", 
+          r.vehicle_name as "vehicleName", 
+          r.price, 
+          r.preferences,
+          r.created_at as "createdAt" 
+        FROM rides r
+        LEFT JOIN users u ON r.driver_id = u.uid
+        WHERE (${passengerId}::text IS NULL OR r.passenger_id = ${passengerId})
+        ORDER BY r.created_at DESC 
         LIMIT 50;
       `;
       res.json(rows);
@@ -269,16 +411,25 @@ async function startServer() {
         RETURNING 
           id, 
           passenger_id as "passengerId", 
+          passenger_name as "passengerName",
           driver_id as "driverId",
-          pickup_location as "pickupLocation", 
-          dropoff_location as "dropoffLocation", 
           status, 
           ride_type as "rideType", 
           vehicle_name as "vehicleName", 
           price, 
+          preferences,
           created_at as "createdAt";
       `;
       const ride = rows[0];
+      
+      // Fetch driver name if assigned
+      if (ride.driverId) {
+        const { rows: driverRows } = await sql`SELECT display_name FROM users WHERE uid = ${ride.driverId}`;
+        if (driverRows.length > 0) {
+          ride.driverName = driverRows[0].display_name;
+        }
+      }
+
       io.emit('ride:updated', ride);
       res.json(ride);
     } catch (err) {
@@ -299,11 +450,11 @@ async function startServer() {
 
   // Vehicle Routes
   app.post('/api/vehicles', async (req, res) => {
-    const { make, model, type, licensePlate, capacity } = req.body;
+    const { make, model, type, licensePlate, capacity, status } = req.body;
     try {
       const { rows } = await sql`
-        INSERT INTO vehicles (make, model, type, license_plate, capacity)
-        VALUES (${make}, ${model}, ${type}, ${licensePlate}, ${capacity})
+        INSERT INTO vehicles (make, model, type, license_plate, capacity, status)
+        VALUES (${make}, ${model}, ${type}, ${licensePlate}, ${capacity}, ${status || 'active'})
         RETURNING 
           id, 
           make, 
@@ -315,6 +466,36 @@ async function startServer() {
       `;
       const vehicle = rows[0];
       io.emit('vehicle:added', vehicle);
+      res.json(vehicle);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch('/api/vehicles/:id', async (req, res) => {
+    const { id } = req.params;
+    const { make, model, type, licensePlate, capacity, status } = req.body;
+    try {
+      const { rows } = await sql`
+        UPDATE vehicles 
+        SET make = COALESCE(${make}, make),
+            model = COALESCE(${model}, model),
+            type = COALESCE(${type}, type),
+            license_plate = COALESCE(${licensePlate}, license_plate),
+            capacity = COALESCE(${capacity}, capacity),
+            status = COALESCE(${status}, status)
+        WHERE id = ${id}
+        RETURNING 
+          id, 
+          make, 
+          model, 
+          type, 
+          license_plate as "licensePlate", 
+          capacity, 
+          status;
+      `;
+      const vehicle = rows[0];
+      io.emit('vehicle:updated', vehicle);
       res.json(vehicle);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -336,6 +517,60 @@ async function startServer() {
         ORDER BY id DESC;
       `;
       res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Vehicle Types Routes
+  app.get('/api/vehicle-types', async (req, res) => {
+    try {
+      const { rows } = await sql`SELECT id, name, base_price as "basePrice", multiplier, capacity, description FROM vehicle_types ORDER BY id ASC`;
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/vehicle-types', async (req, res) => {
+    const { name, basePrice, multiplier, capacity, description } = req.body;
+    try {
+      const { rows } = await sql`
+        INSERT INTO vehicle_types (name, base_price, multiplier, capacity, description)
+        VALUES (${name}, ${basePrice}, ${multiplier}, ${capacity}, ${description})
+        RETURNING id, name, base_price as "basePrice", multiplier, capacity, description;
+      `;
+      res.json(rows[0]);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch('/api/vehicle-types/:id', async (req, res) => {
+    const { id } = req.params;
+    const { name, basePrice, multiplier, capacity, description } = req.body;
+    try {
+      const { rows } = await sql`
+        UPDATE vehicle_types 
+        SET name = COALESCE(${name}, name),
+            base_price = COALESCE(${basePrice}, base_price),
+            multiplier = COALESCE(${multiplier}, multiplier),
+            capacity = COALESCE(${capacity}, capacity),
+            description = COALESCE(${description}, description)
+        WHERE id = ${id}
+        RETURNING id, name, base_price as "basePrice", multiplier, capacity, description;
+      `;
+      res.json(rows[0]);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/vehicle-types/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+      await sql`DELETE FROM vehicle_types WHERE id = ${id}`;
+      res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -464,11 +699,11 @@ async function startServer() {
 
   // POI Routes
   app.post('/api/pois', async (req, res) => {
-    const { name, price, duration, imageUrl, status } = req.body;
+    const { name, price, tourPrice, duration, imageUrl, status } = req.body;
     try {
       const { rows } = await sql`
-        INSERT INTO pois (name, price, duration, image_url, status)
-        VALUES (${name}, ${price}, ${duration}, ${imageUrl}, ${status})
+        INSERT INTO pois (name, price, tour_price, duration, image_url, status)
+        VALUES (${name}, ${price}, ${tourPrice || 0}, ${duration}, ${imageUrl}, ${status})
         RETURNING *;
       `;
       res.json(rows[0]);
@@ -486,11 +721,63 @@ async function startServer() {
     }
   });
 
+  app.patch('/api/pois/:id', async (req, res) => {
+    const { id } = req.params;
+    const { name, price, tourPrice, duration, imageUrl, status } = req.body;
+    try {
+      const { rows } = await sql`
+        UPDATE pois 
+        SET 
+          name = COALESCE(${name}, name),
+          price = COALESCE(${price}, price),
+          tour_price = COALESCE(${tourPrice}, tour_price),
+          duration = COALESCE(${duration}, duration),
+          image_url = COALESCE(${imageUrl}, image_url),
+          status = COALESCE(${status}, status)
+        WHERE id = ${id}
+        RETURNING *;
+      `;
+      res.json(rows[0]);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.delete('/api/pois/:id', async (req, res) => {
     const { id } = req.params;
     try {
       await sql`DELETE FROM pois WHERE id = ${id};`;
       res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Settings Routes
+  app.get('/api/settings/:key', async (req, res) => {
+    const { key } = req.params;
+    try {
+      const { rows } = await sql`SELECT value FROM settings WHERE key = ${key}`;
+      if (rows.length === 0) return res.status(404).json({ error: 'Setting not found' });
+      res.json(rows[0].value);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/settings/:key', async (req, res) => {
+    const { key } = req.params;
+    const { value } = req.body;
+    try {
+      const { rows } = await sql`
+        INSERT INTO settings (key, value)
+        VALUES (${key}, ${value})
+        ON CONFLICT (key) DO UPDATE SET
+          value = EXCLUDED.value,
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING value;
+      `;
+      res.json(rows[0].value);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

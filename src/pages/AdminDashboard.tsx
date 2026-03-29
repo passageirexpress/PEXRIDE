@@ -5,7 +5,28 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Bell, Send, Car, UserPlus, X, VolumeX, Thermometer, History, LayoutDashboard, Navigation, ChevronRight } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Bell, Send, Car, UserPlus, X, VolumeX, Thermometer, History, LayoutDashboard, Navigation, ChevronRight, RefreshCw, Settings, CreditCard, MapPin, User } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useFirebase } from '../FirebaseProvider';
 import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, limit, addDoc, serverTimestamp, setDoc, getDocs } from 'firebase/firestore';
@@ -28,12 +49,14 @@ interface Ride {
   passengerId: string;
   passengerName?: string;
   driverId?: string;
+  driverName?: string;
   pickupLocation: string;
   dropoffLocation: string;
   status: 'requested' | 'assigned' | 'in-progress' | 'completed' | 'cancelled';
   rideType: string;
   vehicleName?: string;
   price: number;
+  preferences?: any;
   createdAt: any;
 }
 
@@ -58,9 +81,10 @@ interface Vehicle {
 }
 
 interface POI {
-  id: string;
+  id: string | number;
   name: string;
   price: number;
+  tour_price: number;
   duration: string;
   image_url: string;
   status: string;
@@ -94,13 +118,38 @@ export default function AdminDashboard() {
 
   // Vehicle Management States
   const [isAddingVehicle, setIsAddingVehicle] = useState(false);
-  const [newVehicle, setNewVehicle] = useState({ make: '', model: '', type: 'Business', licensePlate: '', capacity: 4 });
+  const [editingVehicle, setEditingVehicle] = useState<any>(null);
+  const [newVehicle, setNewVehicle] = useState({ make: '', model: '', type: 'Business', licensePlate: '', capacity: 4, status: 'active' });
+
+  // Vehicle Type States
+  const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
+  const [isAddingVehicleType, setIsAddingVehicleType] = useState(false);
+  const [newVehicleType, setNewVehicleType] = useState({ name: '', basePrice: 0, multiplier: 1.0, capacity: 4, description: '' });
+  const [editingVehicleType, setEditingVehicleType] = useState<any>(null);
 
   // POI Management States
+  const [drivers, setDrivers] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchDrivers = async () => {
+      try {
+        const res = await fetch('/api/users?role=driver');
+        const data = await res.json();
+        setDrivers(data);
+      } catch (err) {
+        console.error('Error fetching drivers:', err);
+      }
+    };
+    fetchDrivers();
+    const interval = setInterval(fetchDrivers, 10000);
+    return () => clearInterval(interval);
+  }, []);
   const [isAddingPOI, setIsAddingPOI] = useState(false);
-  const [newPOI, setNewPOI] = useState({ name: '', price: 0, duration: '', imageUrl: '', status: 'Active' });
+  const [newPOI, setNewPOI] = useState({ name: '', price: 0, tourPrice: 0, duration: '', imageUrl: '', status: 'Active' });
+  const [globalSettings, setGlobalSettings] = useState({ normal_price_per_km: 1.5, base_fare: 5.0 });
 
   // Driver Registration States
+  const [isAddingDriver, setIsAddingDriver] = useState(false);
   const [newDriver, setNewDriver] = useState({ displayName: '', email: '', phoneNumber: '' });
   
   // Filtering & History States
@@ -109,26 +158,34 @@ export default function AdminDashboard() {
   const [historyData, setHistoryData] = useState<{lat: number, lng: number}[]>([]);
   const [typingUsers, setTypingUsers] = useState<{[key: string]: boolean}>({});
   const typingTimeoutRef = useRef<{[key: string]: NodeJS.Timeout}>({});
+  const [rideToCancel, setRideToCancel] = useState<string | number | null>(null);
+  const [selectedDriverForHistory, setSelectedDriverForHistory] = useState<string | null>(null);
+  const [isEditingPricing, setIsEditingPricing] = useState(false);
+  const [pricingData, setPricingData] = useState<{ type: string, price: number }[]>([]);
 
   useEffect(() => {
     if (profile?.role !== 'admin') return;
 
     const fetchData = async () => {
       try {
-        const [ridesRes, locationsRes, vehiclesRes, passengersRes, poisRes] = await Promise.all([
+        const [ridesRes, locationsRes, vehiclesRes, passengersRes, poisRes, settingsRes, vehicleTypesRes] = await Promise.all([
           fetch('/api/rides'),
           fetch('/api/driver-locations'),
           fetch('/api/vehicles'),
           fetch('/api/users/passengers'),
-          fetch('/api/pois')
+          fetch('/api/pois'),
+          fetch('/api/settings/pricing'),
+          fetch('/api/vehicle-types')
         ]);
 
-        const [ridesData, locationsData, vehiclesData, passengersData, poisData] = await Promise.all([
+        const [ridesData, locationsData, vehiclesData, passengersData, poisData, settingsData, vehicleTypesData] = await Promise.all([
           ridesRes.json(),
           locationsRes.json(),
           vehiclesRes.json(),
           passengersRes.json(),
-          poisRes.json()
+          poisRes.json(),
+          settingsRes.json(),
+          vehicleTypesRes.json()
         ]);
 
         setRides(ridesData);
@@ -136,6 +193,8 @@ export default function AdminDashboard() {
         setVehicles(vehiclesData);
         setChats(passengersData);
         setPois(poisData);
+        setVehicleTypes(vehicleTypesData);
+        if (!settingsData.error) setGlobalSettings(settingsData);
         setLoading(false);
       } catch (err) {
         console.error('Error fetching dashboard data:', err);
@@ -180,6 +239,16 @@ export default function AdminDashboard() {
       setVehicles(prev => [vehicle, ...prev]);
     });
 
+    socket.on('vehicle:updated', (updatedVehicle: Vehicle) => {
+      setVehicles(prev => prev.map(v => v.id === updatedVehicle.id ? updatedVehicle : v));
+    });
+
+    socket.on('user:updated', (updatedUser: any) => {
+      if (updatedUser.role === 'driver') {
+        setDrivers(prev => prev.map(d => d.uid === updatedUser.uid ? updatedUser : d));
+      }
+    });
+
     socket.on('vehicle:deleted', (id: string) => {
       setVehicles(prev => prev.filter(v => v.id !== id));
     });
@@ -204,6 +273,8 @@ export default function AdminDashboard() {
       socket.off('ride:deleted');
       socket.off('driver:location_updated');
       socket.off('vehicle:added');
+      socket.off('vehicle:updated');
+      socket.off('user:updated');
       socket.off('vehicle:deleted');
       socket.off('chat:typing');
     };
@@ -355,10 +426,70 @@ export default function AdminDashboard() {
         body: JSON.stringify(newVehicle),
       });
       setIsAddingVehicle(false);
-      setNewVehicle({ make: '', model: '', type: 'Business', licensePlate: '', capacity: 4 });
+      setNewVehicle({ make: '', model: '', type: 'Business', licensePlate: '', capacity: 4, status: 'active' });
       addNotification('Vehicle added successfully', 'success');
     } catch (error) {
       console.error('Error adding vehicle:', error);
+    }
+  };
+
+  const handleUpdateVehicle = async () => {
+    if (!editingVehicle) return;
+    try {
+      await fetch(`/api/vehicles/${editingVehicle.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingVehicle),
+      });
+      setEditingVehicle(null);
+      addNotification('Vehicle updated successfully', 'success');
+    } catch (error) {
+      console.error('Error updating vehicle:', error);
+    }
+  };
+
+  const handleAddVehicleType = async () => {
+    try {
+      const res = await fetch('/api/vehicle-types', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newVehicleType),
+      });
+      const data = await res.json();
+      setVehicleTypes(prev => [...prev, data]);
+      setIsAddingVehicleType(false);
+      setNewVehicleType({ name: '', basePrice: 0, multiplier: 1.0, capacity: 4, description: '' });
+      addNotification('Vehicle type added', 'success');
+    } catch (error) {
+      console.error('Error adding vehicle type:', error);
+    }
+  };
+
+  const handleUpdateVehicleType = async () => {
+    if (!editingVehicleType) return;
+    try {
+      const res = await fetch(`/api/vehicle-types/${editingVehicleType.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingVehicleType),
+      });
+      const data = await res.json();
+      setVehicleTypes(prev => prev.map(t => t.id === data.id ? data : t));
+      setEditingVehicleType(null);
+      addNotification('Vehicle type updated', 'success');
+    } catch (error) {
+      console.error('Error updating vehicle type:', error);
+    }
+  };
+
+  const handleDeleteVehicleType = async (id: number) => {
+    if (!window.confirm('Delete this vehicle type?')) return;
+    try {
+      await fetch(`/api/vehicle-types/${id}`, { method: 'DELETE' });
+      setVehicleTypes(prev => prev.filter(t => t.id !== id));
+      addNotification('Vehicle type deleted', 'warning');
+    } catch (error) {
+      console.error('Error deleting vehicle type:', error);
     }
   };
 
@@ -383,12 +514,26 @@ export default function AdminDashboard() {
           displayName: newDriver.displayName,
           email: newDriver.email,
           role: 'driver',
+          status: 'pending', // New drivers start as pending
         }),
       });
       setNewDriver({ displayName: '', email: '', phoneNumber: '' });
-      addNotification('Driver registered successfully', 'success');
+      addNotification('Driver registration submitted for approval', 'success');
     } catch (error) {
       console.error('Error registering driver:', error);
+    }
+  };
+
+  const handleApproveDriver = async (uid: string, status: 'active' | 'rejected') => {
+    try {
+      await fetch(`/api/users/${uid}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      addNotification(`Driver ${status === 'active' ? 'approved' : 'rejected'}`, status === 'active' ? 'success' : 'warning');
+    } catch (error) {
+      console.error('Error updating driver status:', error);
     }
   };
 
@@ -402,14 +547,15 @@ export default function AdminDashboard() {
       const data = await res.json();
       setPois(prev => [data, ...prev]);
       setIsAddingPOI(false);
-      setNewPOI({ name: '', price: 0, duration: '', imageUrl: '', status: 'Active' });
+      setNewPOI({ name: '', price: 0, tourPrice: 0, duration: '', imageUrl: '', status: 'Active' });
       addNotification('POI added successfully', 'success');
-    } catch (error) {
-      console.error('Error adding POI:', error);
+    } catch (err) {
+      console.error('Error adding POI:', err);
+      addNotification('Failed to add POI', 'error');
     }
   };
 
-  const handleDeletePOI = async (id: string) => {
+  const handleDeletePOI = async (id: string | number) => {
     if (!window.confirm('Delete this POI?')) return;
     try {
       await fetch(`/api/pois/${id}`, { method: 'DELETE' });
@@ -417,6 +563,22 @@ export default function AdminDashboard() {
       addNotification('POI deleted', 'warning');
     } catch (error) {
       console.error('Error deleting POI:', error);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    try {
+      const res = await fetch('/api/settings/pricing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: globalSettings }),
+      });
+      const data = await res.json();
+      setGlobalSettings(data);
+      addNotification('Pricing settings saved', 'success');
+    } catch (err) {
+      console.error('Error saving settings:', err);
+      addNotification('Failed to save settings', 'error');
     }
   };
 
@@ -460,6 +622,27 @@ export default function AdminDashboard() {
         </AnimatePresence>
       </div>
 
+      {/* Cancellation Dialog */}
+      <Dialog open={!!rideToCancel} onOpenChange={() => setRideToCancel(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel Ride</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to cancel this ride? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRideToCancel(null)}>Keep Ride</Button>
+            <Button variant="destructive" onClick={() => {
+              if (rideToCancel) {
+                updateRideStatus(rideToCancel, 'cancelled');
+                setRideToCancel(null);
+              }
+            }}>Cancel Ride</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Sidebar */}
       <div className="w-full md:w-64 bg-pex-blue text-white flex flex-col">
         <div className="p-6">
@@ -501,6 +684,13 @@ export default function AdminDashboard() {
               <span className="text-sm font-medium">Financial Suite</span>
             </button>
             <button 
+              onClick={() => setActiveTab('pricing')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'pricing' ? 'bg-white/10 text-pex-gold' : 'hover:bg-white/5'}`}
+            >
+              <CreditCard size={18} />
+              <span className="text-sm font-medium">Pricing Management</span>
+            </button>
+            <button 
               onClick={() => setActiveTab('support')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'support' ? 'bg-white/10 text-pex-gold' : 'hover:bg-white/5'}`}
             >
@@ -518,16 +708,18 @@ export default function AdminDashboard() {
             <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
               <h1 className="text-2xl font-bold text-pex-blue">Live Fleet Tracking</h1>
               <div className="flex items-center gap-4">
-                <div className="flex bg-gray-100 rounded-lg p-1">
-                  {(['all', 'available', 'busy', 'offline'] as const).map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setDriverStatusFilter(s)}
-                      className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${driverStatusFilter === s ? 'bg-white text-pex-blue shadow-sm' : 'text-gray-500 hover:text-pex-blue'}`}
-                    >
-                      {s.charAt(0).toUpperCase() + s.slice(1)}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-3 bg-gray-100 p-1 rounded-lg">
+                  <Select value={driverStatusFilter} onValueChange={(v: any) => setDriverStatusFilter(v)}>
+                    <SelectTrigger className="w-[140px] h-8 text-xs bg-white border-none shadow-sm">
+                      <SelectValue placeholder="Filter Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Drivers</SelectItem>
+                      <SelectItem value="available">Available</SelectItem>
+                      <SelectItem value="busy">Busy</SelectItem>
+                      <SelectItem value="offline">Offline</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -550,29 +742,72 @@ export default function AdminDashboard() {
                 {driverLocations
                   .filter(loc => driverStatusFilter === 'all' || loc.status === driverStatusFilter)
                   .map((loc) => (
-                  <motion.div
+                  <div
                     key={loc.id}
-                    initial={false}
-                    animate={{ left: `${loc.lng}%`, top: `${loc.lat}%` }}
-                    className="absolute -translate-x-1/2 -translate-y-1/2 group cursor-pointer"
-                    onClick={() => fetchDriverHistory(loc.driverId)}
+                    className="absolute -translate-x-1/2 -translate-y-1/2 z-20"
+                    style={{ left: `${loc.lng}%`, top: `${loc.lat}%` }}
                   >
-                    <div className={`w-6 h-6 rounded-full border-2 border-white shadow-xl flex items-center justify-center ${
-                      loc.status === 'available' ? 'bg-green-500' : loc.status === 'busy' ? 'bg-yellow-500' : 'bg-gray-500'
-                    }`}>
-                      <Car size={12} className="text-white" />
-                    </div>
-                    
-                    {/* Tooltip */}
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-pex-blue text-white p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                      <p className="font-bold text-xs mb-1">{loc.driverName}</p>
-                      <div className="flex justify-between items-center text-[10px] opacity-80">
-                        <span>Status: {loc.status}</span>
-                        <span>Updated: {new Date(loc.updatedAt).toLocaleTimeString()}</span>
-                      </div>
-                      <p className="text-[8px] mt-1 text-pex-gold">Click to toggle movement history</p>
-                    </div>
-                  </motion.div>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <motion.div
+                          initial={false}
+                          animate={{ scale: 1 }}
+                          whileHover={{ scale: 1.1 }}
+                          className="cursor-pointer"
+                        >
+                          <div className={`w-8 h-8 rounded-full border-2 border-white shadow-xl flex items-center justify-center ${
+                            loc.status === 'available' ? 'bg-green-500' : loc.status === 'busy' ? 'bg-yellow-500' : 'bg-gray-500'
+                          }`}>
+                            <Car size={16} className="text-white" />
+                          </div>
+                        </motion.div>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-64 p-4">
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <h4 className="font-bold text-sm text-pex-blue">{loc.driverName}</h4>
+                              <p className="text-[10px] text-gray-500">ID: {loc.driverId}</p>
+                            </div>
+                            <Badge variant={loc.status === 'available' ? 'default' : 'secondary'} className={loc.status === 'available' ? 'bg-green-500' : ''}>
+                              {loc.status}
+                            </Badge>
+                          </div>
+                          
+                          <div className="flex items-center gap-2 text-[10px] text-gray-400">
+                            <Clock size={12} />
+                            <span>Last updated: {new Date(loc.updatedAt).toLocaleTimeString()}</span>
+                          </div>
+
+                          <div className="pt-2 flex flex-col gap-2">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="w-full text-xs h-8"
+                              onClick={() => {
+                                fetchDriverHistory(loc.driverId);
+                              }}
+                            >
+                              <History size={14} className="mr-2" />
+                              {showHistory === loc.driverId ? 'Hide History' : 'Show History'}
+                            </Button>
+                            <Button 
+                              variant="secondary" 
+                              size="sm" 
+                              className="w-full text-xs h-8"
+                              onClick={() => {
+                                // Mock ride history view
+                                addNotification(`Viewing ride history for ${loc.driverName}`, 'info');
+                              }}
+                            >
+                              <Navigation size={14} className="mr-2" />
+                              View Ride History
+                            </Button>
+                          </div>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
                 ))}
 
                 {/* Driver History Path */}
@@ -650,6 +885,9 @@ export default function AdminDashboard() {
                           </div>
                             <div className="text-sm text-gray-600 space-y-1">
                               <p className="flex items-center gap-2 font-medium text-pex-blue"><Users size={14} /> {ride.passengerName || 'Anonymous'}</p>
+                              {ride.driverName && (
+                                <p className="flex items-center gap-2 text-xs font-semibold text-green-600"><Car size={14} /> Driver: {ride.driverName}</p>
+                              )}
                               <p className="flex items-center gap-2"><Map size={14} /> {ride.rideType} - {ride.vehicleName}</p>
                               {ride.preferences && (
                                 <div className="flex flex-wrap gap-2 mt-2">
@@ -677,7 +915,13 @@ export default function AdminDashboard() {
                               <select 
                                 className="w-full h-8 text-xs rounded-md border border-gray-200 bg-white px-2 focus:ring-1 focus:ring-pex-gold outline-none"
                                 value={ride.status}
-                                onChange={(e) => updateRideStatus(ride.id, e.target.value)}
+                                onChange={(e) => {
+                                  if (e.target.value === 'cancelled') {
+                                    setRideToCancel(ride.id);
+                                  } else {
+                                    updateRideStatus(ride.id, e.target.value);
+                                  }
+                                }}
                               >
                                 <option value="requested">Requested</option>
                                 <option value="assigned">Assigned</option>
@@ -709,8 +953,21 @@ export default function AdminDashboard() {
                             <div className="flex gap-2 pt-1 border-t border-gray-200 mt-2">
                               {ride.status === 'requested' && (
                                 <>
-                                  <Button size="sm" className="flex-1 h-8 text-[10px] bg-green-600 hover:bg-green-700 text-white font-bold" onClick={() => updateRideStatus(ride.id, 'assigned')}>Quick Assign</Button>
-                                  <Button size="sm" variant="outline" className="flex-1 h-8 text-[10px] border-red-200 text-red-600 hover:bg-red-50" onClick={() => updateRideStatus(ride.id, 'cancelled')}>Cancel Ride</Button>
+                                  <Button 
+                                    size="sm" 
+                                    className="flex-1 h-8 text-[10px] bg-green-600 hover:bg-green-700 text-white font-bold" 
+                                    onClick={() => {
+                                      const availableDriver = driverLocations.find(d => d.status === 'available');
+                                      if (availableDriver) {
+                                        updateRideStatus(ride.id, 'assigned', availableDriver.driverId);
+                                      } else {
+                                        addNotification('No available drivers found', 'warning');
+                                      }
+                                    }}
+                                  >
+                                    Quick Assign
+                                  </Button>
+                                  <Button size="sm" variant="outline" className="flex-1 h-8 text-[10px] border-red-200 text-red-600 hover:bg-red-50" onClick={() => setRideToCancel(ride.id)}>Cancel Ride</Button>
                                 </>
                               )}
                               {ride.status === 'assigned' && (
@@ -730,12 +987,19 @@ export default function AdminDashboard() {
 
         {activeTab === 'fleet' && (
           <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h1 className="text-2xl font-bold text-pex-blue">Fleet Management</h1>
-              <Button className="bg-pex-blue text-white" onClick={() => setIsAddingVehicle(true)}>
-                <Plus size={16} className="mr-2" /> Add Vehicle
-              </Button>
-            </div>
+            <Tabs defaultValue="vehicles" className="w-full">
+              <TabsList className="grid w-[400px] grid-cols-2 mb-8">
+                <TabsTrigger value="vehicles">Vehicles</TabsTrigger>
+                <TabsTrigger value="vehicle-types">Vehicle Types</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="vehicles" className="space-y-6">
+                <div className="flex justify-between items-center">
+                  <h1 className="text-2xl font-bold text-pex-blue">Fleet Management</h1>
+                  <Button className="bg-pex-blue text-white" onClick={() => setIsAddingVehicle(true)}>
+                    <Plus size={16} className="mr-2" /> Add Vehicle
+                  </Button>
+                </div>
 
             {isAddingVehicle && (
               <Card className="p-6 bg-white border-pex-gold/30">
@@ -759,17 +1023,71 @@ export default function AdminDashboard() {
                   <div className="space-y-2">
                     <Label>Type</Label>
                     <select className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm" value={newVehicle.type} onChange={e => setNewVehicle({...newVehicle, type: e.target.value})}>
-                      <option>Business</option>
-                      <option>First Class</option>
-                      <option>SUV</option>
+                      {vehicleTypes.map(type => (
+                        <option key={type.id} value={type.name}>{type.name}</option>
+                      ))}
                     </select>
                   </div>
                   <div className="space-y-2">
                     <Label>Capacity</Label>
                     <Input type="number" value={newVehicle.capacity} onChange={e => setNewVehicle({...newVehicle, capacity: parseInt(e.target.value)})} />
                   </div>
+                  <div className="space-y-2">
+                    <Label>Status</Label>
+                    <select className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm" value={newVehicle.status} onChange={e => setNewVehicle({...newVehicle, status: e.target.value})}>
+                      <option value="active">Active</option>
+                      <option value="maintenance">Maintenance</option>
+                      <option value="retired">Retired</option>
+                    </select>
+                  </div>
                   <div className="flex items-end">
                     <Button className="w-full bg-pex-gold text-pex-blue font-bold" onClick={handleAddVehicle}>Save Vehicle</Button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {editingVehicle && (
+              <Card className="p-6 bg-white border-pex-blue/30 mb-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-pex-blue">Edit Vehicle: {editingVehicle.make} {editingVehicle.model}</h3>
+                  <Button variant="ghost" size="icon" onClick={() => setEditingVehicle(null)}><X size={18} /></Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Make</Label>
+                    <Input value={editingVehicle.make} onChange={e => setEditingVehicle({...editingVehicle, make: e.target.value})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Model</Label>
+                    <Input value={editingVehicle.model} onChange={e => setEditingVehicle({...editingVehicle, model: e.target.value})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>License Plate</Label>
+                    <Input value={editingVehicle.licensePlate} onChange={e => setEditingVehicle({...editingVehicle, licensePlate: e.target.value})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Type</Label>
+                    <select className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm" value={editingVehicle.type} onChange={e => setEditingVehicle({...editingVehicle, type: e.target.value})}>
+                      {vehicleTypes.map(type => (
+                        <option key={type.id} value={type.name}>{type.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Capacity</Label>
+                    <Input type="number" value={editingVehicle.capacity} onChange={e => setEditingVehicle({...editingVehicle, capacity: parseInt(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Status</Label>
+                    <select className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm" value={editingVehicle.status} onChange={e => setEditingVehicle({...editingVehicle, status: e.target.value})}>
+                      <option value="active">Active</option>
+                      <option value="maintenance">Maintenance</option>
+                      <option value="retired">Retired</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    <Button className="w-full bg-pex-blue text-white font-bold" onClick={handleUpdateVehicle}>Update Vehicle</Button>
                   </div>
                 </div>
               </Card>
@@ -793,45 +1111,265 @@ export default function AdminDashboard() {
                       <div className="text-gray-500">Capacity: <span className="text-pex-blue font-medium">{v.capacity} pax</span></div>
                     </div>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" className="flex-1">Edit</Button>
+                      <Button variant="outline" size="sm" className="flex-1" onClick={() => setEditingVehicle(v)}>Edit</Button>
                       <Button variant="outline" size="sm" className="text-red-500 hover:bg-red-50" onClick={() => handleDeleteVehicle(v.id)}>Delete</Button>
                     </div>
                   </div>
                 </Card>
               ))}
             </div>
+          </TabsContent>
+
+          <TabsContent value="vehicle-types" className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h1 className="text-2xl font-bold text-pex-blue">Vehicle Types & Pricing</h1>
+              <Button className="bg-pex-blue text-white" onClick={() => setIsAddingVehicleType(true)}>
+                <Plus size={16} className="mr-2" /> Add Type
+              </Button>
+            </div>
+
+            {isAddingVehicleType && (
+              <Card className="p-6 bg-white border-pex-gold/30">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-pex-blue">New Vehicle Type</h3>
+                  <Button variant="ghost" size="icon" onClick={() => setIsAddingVehicleType(false)}><X size={18} /></Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Name</Label>
+                    <Input value={newVehicleType.name} onChange={e => setNewVehicleType({...newVehicleType, name: e.target.value})} placeholder="e.g. Business" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Base Price (€)</Label>
+                    <Input type="number" value={newVehicleType.basePrice} onChange={e => setNewVehicleType({...newVehicleType, basePrice: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Price Multiplier</Label>
+                    <Input type="number" step="0.1" value={newVehicleType.multiplier} onChange={e => setNewVehicleType({...newVehicleType, multiplier: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Capacity</Label>
+                    <Input type="number" value={newVehicleType.capacity} onChange={e => setNewVehicleType({...newVehicleType, capacity: parseInt(e.target.value)})} />
+                  </div>
+                  <div className="md:col-span-2 space-y-2">
+                    <Label>Description</Label>
+                    <Input value={newVehicleType.description} onChange={e => setNewVehicleType({...newVehicleType, description: e.target.value})} placeholder="Brief description of the service level" />
+                  </div>
+                  <div className="flex items-end">
+                    <Button className="w-full bg-pex-gold text-pex-blue font-bold" onClick={handleAddVehicleType}>Save Type</Button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {editingVehicleType && (
+              <Card className="p-6 bg-white border-pex-blue/30 mb-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-pex-blue">Edit Vehicle Type: {editingVehicleType.name}</h3>
+                  <Button variant="ghost" size="icon" onClick={() => setEditingVehicleType(null)}><X size={18} /></Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Name</Label>
+                    <Input value={editingVehicleType.name} onChange={e => setEditingVehicleType({...editingVehicleType, name: e.target.value})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Base Price (€)</Label>
+                    <Input type="number" value={editingVehicleType.basePrice} onChange={e => setEditingVehicleType({...editingVehicleType, basePrice: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Price Multiplier</Label>
+                    <Input type="number" step="0.1" value={editingVehicleType.multiplier} onChange={e => setEditingVehicleType({...editingVehicleType, multiplier: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Capacity</Label>
+                    <Input type="number" value={editingVehicleType.capacity} onChange={e => setEditingVehicleType({...editingVehicleType, capacity: parseInt(e.target.value)})} />
+                  </div>
+                  <div className="md:col-span-2 space-y-2">
+                    <Label>Description</Label>
+                    <Input value={editingVehicleType.description} onChange={e => setEditingVehicleType({...editingVehicleType, description: e.target.value})} />
+                  </div>
+                  <div className="flex items-end">
+                    <Button className="w-full bg-pex-blue text-white font-bold" onClick={handleUpdateVehicleType}>Update Type</Button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {vehicleTypes.map((type) => (
+                <Card key={type.id} className="overflow-hidden border-none shadow-md hover:shadow-lg transition-shadow bg-white group">
+                  <div className="p-6">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="font-bold text-lg text-pex-blue">{type.name}</h3>
+                        <p className="text-xs text-gray-500">{type.description}</p>
+                      </div>
+                      <Badge className="bg-pex-gold/20 text-pex-blue border-none">
+                        x{type.multiplier}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                      <div className="text-gray-500">Base Price: <span className="text-pex-blue font-medium">€{type.basePrice}</span></div>
+                      <div className="text-gray-500">Capacity: <span className="text-pex-blue font-medium">{type.capacity} pax</span></div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" className="flex-1" onClick={() => setEditingVehicleType(type)}>Edit</Button>
+                      <Button variant="outline" size="sm" className="text-red-500 hover:bg-red-50" onClick={() => handleDeleteVehicleType(type.id)}>Delete</Button>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+    )}
+
+        {activeTab === 'drivers' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h1 className="text-2xl font-bold text-pex-blue">Driver Management</h1>
+              <Button className="bg-pex-blue text-white" onClick={() => setIsAddingDriver(true)}>
+                <Plus size={16} className="mr-2" /> Register New Driver
+              </Button>
+            </div>
+
+            {isAddingDriver && (
+              <Card className="p-8 max-w-2xl mx-auto relative">
+                <Button variant="ghost" size="icon" className="absolute top-4 right-4" onClick={() => setIsAddingDriver(false)}><X size={18} /></Button>
+                <div className="space-y-6">
+                  <h3 className="text-xl font-bold text-pex-blue">Driver Onboarding</h3>
+                  <div className="grid grid-cols-1 gap-4">
+                    <div className="space-y-2">
+                      <Label>Full Name</Label>
+                      <Input value={newDriver.displayName} onChange={e => setNewDriver({...newDriver, displayName: e.target.value})} placeholder="John Doe" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Email Address</Label>
+                      <Input type="email" value={newDriver.email} onChange={e => setNewDriver({...newDriver, email: e.target.value})} placeholder="john@example.com" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Phone Number</Label>
+                      <Input value={newDriver.phoneNumber} onChange={e => setNewDriver({...newDriver, phoneNumber: e.target.value})} placeholder="+351 912 345 678" />
+                    </div>
+                  </div>
+                  <div className="pt-4">
+                    <Button className="w-full bg-pex-blue text-white h-12 text-lg" onClick={() => {
+                      handleRegisterDriver();
+                      setIsAddingDriver(false);
+                    }}>
+                      Register Driver
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <div className="grid grid-cols-1 gap-4">
+              {drivers.map((driver) => (
+                <Card key={driver.uid} className="p-4">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-pex-blue/10 rounded-full flex items-center justify-center">
+                        <User size={24} className="text-pex-blue" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-pex-blue">{driver.displayName}</h3>
+                        <p className="text-sm text-gray-500">{driver.email}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <Badge className={
+                        driver.status === 'active' ? 'bg-green-100 text-green-800' :
+                        driver.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-red-100 text-red-800'
+                      }>
+                        {driver.status?.toUpperCase() || 'PENDING'}
+                      </Badge>
+                      {driver.status === 'pending' && (
+                        <div className="flex gap-2">
+                          <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => handleApproveDriver(driver.uid, 'active')}>Approve</Button>
+                          <Button size="sm" variant="destructive" onClick={() => handleApproveDriver(driver.uid, 'rejected')}>Reject</Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+              {drivers.length === 0 && (
+                <div className="text-center py-12 text-gray-400">
+                  <Users size={48} className="mx-auto mb-2 opacity-20" />
+                  <p>No drivers registered yet.</p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {activeTab === 'drivers' && (
-          <div className="space-y-6 max-w-2xl mx-auto">
-            <h1 className="text-2xl font-bold text-pex-blue">Driver Onboarding</h1>
-            <Card className="p-8">
-              <div className="space-y-6">
-                <div className="grid grid-cols-1 gap-4">
+        {activeTab === 'pricing' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+              <h1 className="text-2xl font-bold text-pex-blue">Pricing Management</h1>
+              <Button className="bg-pex-gold text-pex-blue font-bold" onClick={handleSaveSettings}>
+                Save Changes
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Car size={20} className="text-pex-gold" />
+                    Global Ride Pricing
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Full Name</Label>
-                    <Input value={newDriver.displayName} onChange={e => setNewDriver({...newDriver, displayName: e.target.value})} placeholder="John Doe" />
+                    <Label>Base Fare (€)</Label>
+                    <Input 
+                      type="number" 
+                      value={globalSettings.base_fare} 
+                      onChange={e => setGlobalSettings({...globalSettings, base_fare: parseFloat(e.target.value)})}
+                    />
                   </div>
                   <div className="space-y-2">
-                    <Label>Email Address</Label>
-                    <Input type="email" value={newDriver.email} onChange={e => setNewDriver({...newDriver, email: e.target.value})} placeholder="john@example.com" />
+                    <Label>Price per KM (€)</Label>
+                    <Input 
+                      type="number" 
+                      value={globalSettings.normal_price_per_km} 
+                      onChange={e => setGlobalSettings({...globalSettings, normal_price_per_km: parseFloat(e.target.value)})}
+                    />
                   </div>
-                  <div className="space-y-2">
-                    <Label>Phone Number</Label>
-                    <Input value={newDriver.phoneNumber} onChange={e => setNewDriver({...newDriver, phoneNumber: e.target.value})} placeholder="+351 912 345 678" />
-                  </div>
-                </div>
-                <div className="pt-4">
-                  <Button className="w-full bg-pex-blue text-white h-12 text-lg" onClick={handleRegisterDriver}>
-                    Register Driver
-                  </Button>
-                  <p className="text-xs text-gray-400 text-center mt-4">
-                    This will create a driver profile. The driver will receive an email to set their password.
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <MapPin size={20} className="text-pex-gold" />
+                    Tour Experience Multipliers
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-sm text-gray-500">
+                    Tour experience prices are set per POI in the POI Manager.
+                    These base rates are for quick reference.
                   </p>
-                </div>
-              </div>
-            </Card>
+                  {[
+                    { name: 'Lisbon - Porto', price: 450 },
+                    { name: 'Lisbon - Algarve', price: 550 },
+                    { name: 'Porto - Douro Valley', price: 350 },
+                    { name: 'Lisbon - Sintra', price: 150 }
+                  ].map((t) => (
+                    <div key={t.name} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <span className="font-medium">{t.name}</span>
+                      <span className="font-bold text-pex-gold">€{t.price}</span>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
           </div>
         )}
 
@@ -1006,20 +1544,24 @@ export default function AdminDashboard() {
                   <h3 className="font-bold text-pex-blue">New POI Details</h3>
                   <Button variant="ghost" size="icon" onClick={() => setIsAddingPOI(false)}><X size={18} /></Button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <div className="space-y-2">
                     <Label>Name</Label>
                     <Input value={newPOI.name} onChange={e => setNewPOI({...newPOI, name: e.target.value})} placeholder="e.g. Óbidos Castle" />
                   </div>
                   <div className="space-y-2">
-                    <Label>Price (€)</Label>
+                    <Label>Normal Price (€)</Label>
                     <Input type="number" value={newPOI.price} onChange={e => setNewPOI({...newPOI, price: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Tour Price (€)</Label>
+                    <Input type="number" value={newPOI.tourPrice} onChange={e => setNewPOI({...newPOI, tourPrice: parseFloat(e.target.value)})} />
                   </div>
                   <div className="space-y-2">
                     <Label>Duration</Label>
                     <Input value={newPOI.duration} onChange={e => setNewPOI({...newPOI, duration: e.target.value})} placeholder="e.g. +1.5 hrs" />
                   </div>
-                  <div className="space-y-2 md:col-span-2">
+                  <div className="space-y-2 md:col-span-3">
                     <Label>Image URL</Label>
                     <Input value={newPOI.imageUrl} onChange={e => setNewPOI({...newPOI, imageUrl: e.target.value})} placeholder="https://..." />
                   </div>
@@ -1050,9 +1592,12 @@ export default function AdminDashboard() {
                         </Button>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between text-sm text-gray-500">
-                      <span className="flex items-center gap-1"><Clock size={14} /> {poi.duration}</span>
-                      <span className="font-bold text-pex-gold">€{poi.price}</span>
+                    <div className="flex items-center justify-between text-xs text-gray-500">
+                      <span className="flex items-center gap-1"><Clock size={12} /> {poi.duration}</span>
+                      <div className="flex flex-col items-end">
+                        <span className="font-bold text-pex-blue">Normal: €{poi.price}</span>
+                        <span className="font-bold text-pex-gold">Tour: €{poi.tour_price}</span>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>

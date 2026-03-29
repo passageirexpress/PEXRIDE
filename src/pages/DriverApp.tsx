@@ -1,271 +1,229 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { MapPin, Navigation, CheckCircle2, Clock, User, Car, Power, AlertCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { useFirebase } from '../FirebaseProvider';
+import { Map, Users, DollarSign, MessageSquare, CheckCircle2, Clock, AlertCircle, Car, Navigation, ChevronRight, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-
-interface Ride {
-  id: string;
-  passenger_id: string;
-  passenger_name?: string;
-  pickup_location: string;
-  dropoff_location: string;
-  status: string;
-  ride_type: string;
-  price: number;
-}
+import { socket } from '../lib/socket';
 
 export default function DriverApp() {
-  const { user, profile } = useFirebase();
+  const { user: currentUser, profile, signOut } = useFirebase();
+  const [activeRides, setActiveRides] = useState<any[]>([]);
   const [status, setStatus] = useState<'available' | 'busy' | 'offline'>('offline');
-  const [assignedRides, setAssignedRides] = useState<Ride[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [location, setLocation] = useState({ lat: 38.7223, lng: -9.1393 }); // Lisbon coordinates
+  const [location, setLocation] = useState({ lat: 38.7223, lng: -9.1393 }); // Lisbon default
 
   useEffect(() => {
-    if (!user) return;
+    if (!currentUser) return;
 
+    // Fetch assigned rides
     const fetchRides = async () => {
       try {
-        const res = await fetch('/api/rides');
+        const res = await fetch(`/api/rides?driverId=${currentUser.uid}`);
         const data = await res.json();
-        // Filter rides assigned to this driver
-        setAssignedRides(data.filter((r: any) => r.driver_id === user.uid && r.status !== 'completed' && r.status !== 'cancelled'));
-        setLoading(false);
+        setActiveRides(data.filter((r: any) => r.status !== 'completed' && r.status !== 'cancelled'));
       } catch (err) {
         console.error('Error fetching rides:', err);
       }
     };
 
     fetchRides();
-    const interval = setInterval(fetchRides, 10000); // Poll every 10s
 
-    return () => clearInterval(interval);
-  }, [user]);
-
-  useEffect(() => {
-    if (!user || status === 'offline') return;
-
-    const updateLocation = async () => {
-      // Simulate movement
-      const newLat = location.lat + (Math.random() - 0.5) * 0.001;
-      const newLng = location.lng + (Math.random() - 0.5) * 0.001;
-      setLocation({ lat: newLat, lng: newLng });
-
-      try {
-        await fetch('/api/driver-locations', {
+    // Update location periodically
+    const interval = setInterval(() => {
+      if (status !== 'offline') {
+        const newLat = location.lat + (Math.random() - 0.5) * 0.001;
+        const newLng = location.lng + (Math.random() - 0.5) * 0.001;
+        setLocation({ lat: newLat, lng: newLng });
+        
+        fetch('/api/driver-locations', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            driverId: user.uid,
-            driverName: profile?.displayName || user.displayName || 'Driver',
+            driverId: currentUser.uid,
+            driverName: profile?.displayName || 'Driver',
             lat: newLat,
             lng: newLng,
             status: status
-          }),
+          })
         });
-      } catch (err) {
-        console.error('Error updating location:', err);
       }
-    };
+    }, 5000);
 
-    const interval = setInterval(updateLocation, 5000);
     return () => clearInterval(interval);
-  }, [user, status, location, profile]);
+  }, [currentUser, status, location, profile]);
 
-  const handleStatusChange = async (newStatus: 'available' | 'busy' | 'offline') => {
-    setStatus(newStatus);
-    if (user) {
-      try {
-        await fetch('/api/driver-locations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            driverId: user.uid,
-            driverName: profile?.displayName || user.displayName || 'Driver',
-            lat: location.lat,
-            lng: location.lng,
-            status: newStatus
-          }),
-        });
-      } catch (err) {
-        console.error('Error updating status:', err);
-      }
-    }
-  };
-
-  const completeRide = async (rideId: string) => {
+  const updateRideStatus = async (rideId: string | number, newStatus: string) => {
     try {
       await fetch(`/api/rides/${rideId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'completed' }),
+        body: JSON.stringify({ status: newStatus }),
       });
-      setAssignedRides(prev => prev.filter(r => r.id !== rideId));
-      setStatus('available');
+      setActiveRides(prev => prev.map(r => r.id === rideId ? { ...r, status: newStatus } : r));
     } catch (err) {
-      console.error('Error completing ride:', err);
+      console.error('Error updating ride status:', err);
     }
   };
 
-  if (!user) {
+  if (profile?.role !== 'driver') {
     return (
-      <div className="flex-1 flex items-center justify-center bg-gray-50 p-6">
-        <Card className="max-w-md w-full p-8 text-center space-y-4">
-          <div className="w-16 h-16 bg-pex-blue/10 rounded-full flex items-center justify-center mx-auto">
-            <User size={32} className="text-pex-blue" />
-          </div>
-          <h2 className="text-2xl font-bold text-pex-blue">Driver Access</h2>
-          <p className="text-gray-600">Please log in to access your driver dashboard.</p>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <Card className="max-w-md w-full text-center p-8">
+          <AlertCircle size={48} className="mx-auto text-red-500 mb-4" />
+          <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
+          <p className="text-gray-500 mb-6">This panel is only accessible to approved drivers.</p>
+          <Button onClick={() => window.location.href = '/'}>Go to Home</Button>
         </Card>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 bg-gray-50 p-4 md:p-8 overflow-y-auto">
-      <div className="max-w-4xl mx-auto space-y-6">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-pex-blue">Driver Dashboard</h1>
-            <p className="text-gray-500">Welcome back, {profile?.displayName || user.displayName}</p>
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Header */}
+      <header className="bg-pex-blue text-white p-4 shadow-lg flex justify-between items-center">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-pex-gold flex items-center justify-center font-bold text-pex-blue">
+            {profile?.displayName?.charAt(0) || 'D'}
           </div>
-          <div className="flex gap-2">
-            <Button 
-              variant={status === 'available' ? 'default' : 'outline'}
-              className={status === 'available' ? 'bg-green-600 hover:bg-green-700' : ''}
-              onClick={() => handleStatusChange('available')}
-            >
-              Available
-            </Button>
-            <Button 
-              variant={status === 'busy' ? 'default' : 'outline'}
-              className={status === 'busy' ? 'bg-yellow-600 hover:bg-yellow-700' : ''}
-              onClick={() => handleStatusChange('busy')}
-            >
-              Busy
-            </Button>
-            <Button 
-              variant={status === 'offline' ? 'default' : 'outline'}
-              className={status === 'offline' ? 'bg-red-600 hover:bg-red-700' : ''}
-              onClick={() => handleStatusChange('offline')}
-            >
-              Offline
-            </Button>
+          <div>
+            <h1 className="font-bold text-sm">{profile?.displayName}</h1>
+            <p className="text-[10px] text-pex-gold uppercase tracking-widest">Elite Chauffeur</p>
           </div>
         </div>
+        <div className="flex items-center gap-4">
+          <select 
+            value={status} 
+            onChange={(e) => setStatus(e.target.value as any)}
+            className={`text-xs font-bold px-3 py-1.5 rounded-full border-none outline-none ${
+              status === 'available' ? 'bg-green-500 text-white' : status === 'busy' ? 'bg-yellow-500 text-white' : 'bg-gray-500 text-white'
+            }`}
+          >
+            <option value="available">Available</option>
+            <option value="busy">Busy</option>
+            <option value="offline">Offline</option>
+          </select>
+          <Button variant="ghost" size="icon" onClick={signOut}>
+            <LogOut size={18} />
+          </Button>
+        </div>
+      </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card className="md:col-span-2">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Navigation size={20} className="text-pex-blue" />
-                Assigned Rides
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {loading ? (
-                <div className="text-center py-8 text-gray-400">Loading rides...</div>
-              ) : assignedRides.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
-                  <Car size={48} className="mx-auto mb-2 opacity-20" />
-                  <p>No active rides assigned to you.</p>
-                </div>
-              ) : (
-                assignedRides.map((ride) => (
-                  <Card key={ride.id} className="border-pex-gold/30 bg-pex-gold/5">
-                    <CardContent className="p-6">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <Badge className="bg-pex-blue text-white mb-2">{ride.ride_type}</Badge>
-                          <h3 className="font-bold text-lg text-pex-blue">{ride.passenger_name || 'Passenger'}</h3>
-                        </div>
-                        <span className="text-xl font-bold text-pex-blue">€{ride.price}</span>
-                      </div>
-                      
-                      <div className="space-y-3 mb-6">
-                        <div className="flex items-start gap-3">
-                          <div className="w-2 h-2 rounded-full bg-pex-blue mt-1.5 shrink-0" />
-                          <div>
-                            <p className="text-xs text-gray-500 uppercase">Pickup</p>
-                            <p className="text-sm font-medium">{ride.pickup_location}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-start gap-3">
-                          <div className="w-2 h-2 rounded-full bg-pex-gold mt-1.5 shrink-0" />
-                          <div>
-                            <p className="text-xs text-gray-500 uppercase">Dropoff</p>
-                            <p className="text-sm font-medium">{ride.dropoff_location}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex gap-3">
-                        <Button className="flex-1 bg-pex-blue hover:bg-pex-blue/90 text-white" onClick={() => completeRide(ride.id)}>
-                          <CheckCircle2 size={18} className="mr-2" /> Complete Ride
-                        </Button>
-                        <Button variant="outline" className="flex-1">
-                          Navigate
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
-              )}
+      <main className="flex-1 p-4 max-w-4xl mx-auto w-full space-y-6">
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-4">
+          <Card className="bg-white border-none shadow-sm">
+            <CardContent className="p-4 text-center">
+              <p className="text-[10px] text-gray-400 uppercase font-bold mb-1">Today's Earnings</p>
+              <p className="text-xl font-bold text-pex-blue">€342</p>
             </CardContent>
           </Card>
-
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Your Status</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500">Current Status</span>
-                  <Badge className={
-                    status === 'available' ? 'bg-green-100 text-green-800' :
-                    status === 'busy' ? 'bg-yellow-100 text-yellow-800' :
-                    'bg-red-100 text-red-800'
-                  }>
-                    {status.toUpperCase()}
-                  </Badge>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-500">Location</span>
-                  <span className="text-xs font-mono">{location.lat.toFixed(4)}, {location.lng.toFixed(4)}</span>
-                </div>
-                <div className="pt-4 border-t">
-                  <p className="text-xs text-gray-400 flex items-center gap-1">
-                    <Clock size={12} /> Last updated: {new Date().toLocaleTimeString()}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="bg-pex-blue text-white">
-              <CardContent className="p-6 text-center space-y-4">
-                <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center mx-auto">
-                  <Power size={24} className="text-pex-gold" />
-                </div>
-                <div>
-                  <h3 className="font-bold">End Shift</h3>
-                  <p className="text-xs text-white/60">Set status to offline and stop location tracking.</p>
-                </div>
-                <Button 
-                  variant="outline" 
-                  className="w-full border-white/20 hover:bg-white/10 text-white"
-                  onClick={() => handleStatusChange('offline')}
-                >
-                  Go Offline
-                </Button>
-              </CardContent>
-            </Card>
-          </div>
+          <Card className="bg-white border-none shadow-sm">
+            <CardContent className="p-4 text-center">
+              <p className="text-[10px] text-gray-400 uppercase font-bold mb-1">Rides</p>
+              <p className="text-xl font-bold text-pex-blue">8</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-white border-none shadow-sm">
+            <CardContent className="p-4 text-center">
+              <p className="text-[10px] text-gray-400 uppercase font-bold mb-1">Rating</p>
+              <p className="text-xl font-bold text-pex-gold">4.98</p>
+            </CardContent>
+          </Card>
         </div>
-      </div>
+
+        {/* Assigned Rides */}
+        <div className="space-y-4">
+          <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest px-1">Active Assignments</h2>
+          {activeRides.length === 0 ? (
+            <div className="bg-white p-12 rounded-2xl text-center border-2 border-dashed border-gray-100">
+              <Car size={48} className="mx-auto text-gray-200 mb-4" />
+              <p className="text-gray-400 font-medium">No active rides assigned to you.</p>
+              <p className="text-xs text-gray-300 mt-1">Stay available to receive new requests.</p>
+            </div>
+          ) : (
+            activeRides.map((ride) => (
+              <Card key={ride.id} className="overflow-hidden border-none shadow-md">
+                <CardHeader className="bg-pex-blue text-white p-4 flex flex-row justify-between items-center">
+                  <div>
+                    <CardTitle className="text-sm font-bold">Ride #{String(ride.id).slice(0, 8)}</CardTitle>
+                    <p className="text-[10px] text-pex-gold uppercase tracking-widest">{ride.rideType}</p>
+                  </div>
+                  <Badge className="bg-white/20 text-white border-none">{ride.status}</Badge>
+                </CardHeader>
+                <CardContent className="p-4 space-y-4">
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-2 h-2 rounded-full bg-green-500 mt-1.5" />
+                      <div>
+                        <p className="text-[10px] text-gray-400 uppercase font-bold">Pickup</p>
+                        <p className="text-sm font-medium">{ride.pickupLocation}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <div className="w-2 h-2 rounded-full bg-pex-gold mt-1.5" />
+                      <div>
+                        <p className="text-[10px] text-gray-400 uppercase font-bold">Dropoff</p>
+                        <p className="text-sm font-medium">{ride.dropoffLocation}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-4 border-t">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
+                        <Users size={16} className="text-pex-blue" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold">{ride.passengerName || 'Anonymous'}</p>
+                        <p className="text-[10px] text-gray-400">Passenger</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-bold text-pex-blue">€{ride.price}</p>
+                      <p className="text-[10px] text-gray-400">Fixed Fare</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-2">
+                    {ride.status === 'assigned' && (
+                      <Button className="w-full bg-pex-blue text-white" onClick={() => updateRideStatus(ride.id, 'in-progress')}>
+                        Start Ride
+                      </Button>
+                    )}
+                    {ride.status === 'in-progress' && (
+                      <Button className="w-full bg-green-600 text-white" onClick={() => updateRideStatus(ride.id, 'completed')}>
+                        Complete Ride
+                      </Button>
+                    )}
+                    <Button variant="outline" className="w-full">
+                      <Navigation size={14} className="mr-2" />
+                      Navigate
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </div>
+      </main>
+
+      {/* Bottom Nav Mockup */}
+      <footer className="bg-white border-t p-4 flex justify-around items-center">
+        <button className="flex flex-col items-center gap-1 text-pex-blue">
+          <Car size={20} />
+          <span className="text-[10px] font-bold uppercase">Rides</span>
+        </button>
+        <button className="flex flex-col items-center gap-1 text-gray-400">
+          <MessageSquare size={20} />
+          <span className="text-[10px] font-bold uppercase">Chat</span>
+        </button>
+        <button className="flex flex-col items-center gap-1 text-gray-400">
+          <DollarSign size={20} />
+          <span className="text-[10px] font-bold uppercase">Earnings</span>
+        </button>
+      </footer>
     </div>
   );
 }
