@@ -64,6 +64,7 @@ async function startServer() {
       CREATE TABLE IF NOT EXISTS rides (
         id SERIAL PRIMARY KEY,
         passenger_id TEXT REFERENCES users(uid),
+        passenger_name TEXT,
         driver_id TEXT,
         pickup_location TEXT NOT NULL,
         dropoff_location TEXT NOT NULL,
@@ -71,6 +72,7 @@ async function startServer() {
         ride_type TEXT,
         vehicle_name TEXT,
         price NUMERIC,
+        preferences JSONB,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `;
@@ -92,7 +94,8 @@ async function startServer() {
         sender_id TEXT NOT NULL,
         sender_name TEXT,
         text TEXT NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        read_at TIMESTAMP WITH TIME ZONE
       );
     `;
     await sql`
@@ -168,7 +171,14 @@ async function startServer() {
           email = EXCLUDED.email,
           display_name = EXCLUDED.display_name,
           photo_url = EXCLUDED.photo_url
-        RETURNING *;
+        RETURNING 
+          id, 
+          uid, 
+          email, 
+          display_name as "displayName", 
+          role, 
+          photo_url as "photoURL", 
+          created_at as "createdAt";
       `;
       res.json(rows[0]);
     } catch (err) {
@@ -178,7 +188,19 @@ async function startServer() {
 
   app.get('/api/users/passengers', async (req, res) => {
     try {
-      const { rows } = await sql`SELECT * FROM users WHERE role = 'passenger' ORDER BY created_at DESC;`;
+      const { rows } = await sql`
+        SELECT 
+          id, 
+          uid, 
+          email, 
+          display_name as "displayName", 
+          role, 
+          photo_url as "photoURL", 
+          created_at as "createdAt" 
+        FROM users 
+        WHERE role = 'passenger' 
+        ORDER BY created_at DESC;
+      `;
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -187,12 +209,22 @@ async function startServer() {
 
   // Ride Routes
   app.post('/api/rides', async (req, res) => {
-    const { passengerId, pickupLocation, dropoffLocation, rideType, vehicleName, price } = req.body;
+    const { passengerId, passengerName, pickupLocation, dropoffLocation, rideType, vehicleName, price } = req.body;
     try {
       const { rows } = await sql`
-        INSERT INTO rides (passenger_id, pickup_location, dropoff_location, ride_type, vehicle_name, price)
-        VALUES (${passengerId}, ${pickupLocation}, ${dropoffLocation}, ${rideType}, ${vehicleName}, ${price})
-        RETURNING *;
+        INSERT INTO rides (passenger_id, passenger_name, pickup_location, dropoff_location, ride_type, vehicle_name, price)
+        VALUES (${passengerId}, ${passengerName}, ${pickupLocation}, ${dropoffLocation}, ${rideType}, ${vehicleName}, ${price})
+        RETURNING 
+          id, 
+          passenger_id as "passengerId", 
+          passenger_name as "passengerName",
+          pickup_location as "pickupLocation", 
+          dropoff_location as "dropoffLocation", 
+          status, 
+          ride_type as "rideType", 
+          vehicle_name as "vehicleName", 
+          price, 
+          created_at as "createdAt";
       `;
       const ride = rows[0];
       io.emit('ride:requested', ride);
@@ -204,7 +236,21 @@ async function startServer() {
 
   app.get('/api/rides', async (req, res) => {
     try {
-      const { rows } = await sql`SELECT * FROM rides ORDER BY created_at DESC LIMIT 50;`;
+      const { rows } = await sql`
+        SELECT 
+          id, 
+          passenger_id as "passengerId", 
+          pickup_location as "pickupLocation", 
+          dropoff_location as "dropoffLocation", 
+          status, 
+          ride_type as "rideType", 
+          vehicle_name as "vehicleName", 
+          price, 
+          created_at as "createdAt" 
+        FROM rides 
+        ORDER BY created_at DESC 
+        LIMIT 50;
+      `;
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -220,7 +266,17 @@ async function startServer() {
         SET status = COALESCE(${status}, status), 
             driver_id = COALESCE(${driverId}, driver_id)
         WHERE id = ${id}
-        RETURNING *;
+        RETURNING 
+          id, 
+          passenger_id as "passengerId", 
+          driver_id as "driverId",
+          pickup_location as "pickupLocation", 
+          dropoff_location as "dropoffLocation", 
+          status, 
+          ride_type as "rideType", 
+          vehicle_name as "vehicleName", 
+          price, 
+          created_at as "createdAt";
       `;
       const ride = rows[0];
       io.emit('ride:updated', ride);
@@ -248,7 +304,14 @@ async function startServer() {
       const { rows } = await sql`
         INSERT INTO vehicles (make, model, type, license_plate, capacity)
         VALUES (${make}, ${model}, ${type}, ${licensePlate}, ${capacity})
-        RETURNING *;
+        RETURNING 
+          id, 
+          make, 
+          model, 
+          type, 
+          license_plate as "licensePlate", 
+          capacity, 
+          status;
       `;
       const vehicle = rows[0];
       io.emit('vehicle:added', vehicle);
@@ -260,7 +323,18 @@ async function startServer() {
 
   app.get('/api/vehicles', async (req, res) => {
     try {
-      const { rows } = await sql`SELECT * FROM vehicles ORDER BY id DESC;`;
+      const { rows } = await sql`
+        SELECT 
+          id, 
+          make, 
+          model, 
+          type, 
+          license_plate as "licensePlate", 
+          capacity, 
+          status 
+        FROM vehicles 
+        ORDER BY id DESC;
+      `;
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -303,6 +377,22 @@ async function startServer() {
         SELECT * FROM chat_messages WHERE chat_id = ${chatId} ORDER BY created_at ASC;
       `;
       res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch('/api/chats/:chatId/read', async (req, res) => {
+    const { chatId } = req.params;
+    const { userId } = req.body;
+    try {
+      await sql`
+        UPDATE chat_messages 
+        SET read_at = CURRENT_TIMESTAMP 
+        WHERE chat_id = ${chatId} AND sender_id != ${userId} AND read_at IS NULL;
+      `;
+      io.to(chatId).emit('chat:read', { chatId, userId });
+      res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -355,7 +445,17 @@ async function startServer() {
 
   app.get('/api/driver-locations', async (req, res) => {
     try {
-      const { rows } = await sql`SELECT * FROM driver_locations;`;
+      const { rows } = await sql`
+        SELECT 
+          id, 
+          driver_id as "driverId", 
+          driver_name as "driverName", 
+          lat, 
+          lng, 
+          status, 
+          updated_at as "updatedAt" 
+        FROM driver_locations;
+      `;
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });

@@ -60,6 +60,8 @@ export default function PassengerApp() {
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const typingTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const typingTimerRef = React.useRef<NodeJS.Timeout | null>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -73,6 +75,14 @@ export default function PassengerApp() {
       .then(res => res.json())
       .then(data => {
         setMessages(data);
+        
+        // Mark messages as read
+        fetch(`/api/chats/${user.uid}/read`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.uid }),
+        });
+
         setTimeout(() => {
           if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -85,6 +95,16 @@ export default function PassengerApp() {
     const handleNewMessage = (message: any) => {
       if (message.chat_id === user.uid) {
         setMessages(prev => [...prev, message]);
+        
+        // Mark as read if we are the recipient
+        if (message.sender_id !== user.uid) {
+          fetch(`/api/chats/${user.uid}/read`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: user.uid }),
+          });
+        }
+
         setTimeout(() => {
           if (scrollRef.current) {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -93,11 +113,26 @@ export default function PassengerApp() {
       }
     };
 
+    const handleChatRead = (data: { chatId: string, userId: string }) => {
+      if (data.chatId === user.uid) {
+        setMessages(prev => prev.map(m => m.sender_id === data.userId ? m : { ...m, read_at: m.read_at || new Date().toISOString() }));
+      }
+    };
+
     socket.on('chat:message', handleNewMessage);
+    socket.on('chat:read', handleChatRead);
     
     socket.on('chat:typing', (data: { chatId: string, isTyping: boolean }) => {
       if (data.chatId === user?.uid) {
         setIsTyping(data.isTyping);
+        
+        // Auto-clear typing status after 3 seconds if no new event
+        if (data.isTyping) {
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = setTimeout(() => {
+            setIsTyping(false);
+          }, 3000);
+        }
       }
     });
 
@@ -109,6 +144,7 @@ export default function PassengerApp() {
 
     return () => {
       socket.off('chat:message', handleNewMessage);
+      socket.off('chat:read', handleChatRead);
     };
   }, [user, isChatOpen]);
 
@@ -143,6 +179,16 @@ export default function PassengerApp() {
     if (user) {
       socket.emit('chat:typing', { chatId: user.uid, isTyping: typing });
     }
+  };
+
+  const onInputChange = (val: string) => {
+    setNewMessage(val);
+    handleTyping(true);
+    
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = setTimeout(() => {
+      handleTyping(false);
+    }, 2000);
   };
 
   const selectedVehicle = VEHICLES[selectedVehicleIdx];
@@ -608,21 +654,38 @@ export default function PassengerApp() {
                     <p className="text-sm">How can we help you today?</p>
                   </div>
                 ) : (
-                  messages.map((msg) => (
-                    <div key={msg.id} className={`flex ${msg.sender_id === user?.uid ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${msg.sender_id === user?.uid ? 'bg-pex-blue text-white rounded-tr-none' : 'bg-white text-gray-800 shadow-sm border border-gray-100 rounded-tl-none'}`}>
-                        {msg.text}
-                        <div className={`flex items-center justify-between gap-4 mt-1 ${msg.sender_id === user?.uid ? 'text-white/60' : 'text-gray-400'}`}>
-                          <p className="text-[10px]">
-                            {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          </p>
-                          {msg.sender_id === user?.uid && (
-                            <CheckCircle2 size={10} className="text-pex-gold" />
-                          )}
+                  messages.map((msg, idx) => {
+                    const prevMsg = messages[idx - 1];
+                    const showDate = !prevMsg || new Date(msg.created_at).toDateString() !== new Date(prevMsg.created_at).toDateString();
+                    
+                    return (
+                      <React.Fragment key={msg.id}>
+                        {showDate && (
+                          <div className="flex justify-center my-4">
+                            <span className="px-3 py-1 bg-gray-100 text-gray-400 text-[10px] rounded-full uppercase tracking-wider font-bold">
+                              {new Date(msg.created_at).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
+                            </span>
+                          </div>
+                        )}
+                        <div className={`flex ${msg.sender_id === user?.uid ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${msg.sender_id === user?.uid ? 'bg-pex-blue text-white rounded-tr-none' : 'bg-white text-gray-800 shadow-sm border border-gray-100 rounded-tl-none'}`}>
+                            {msg.text}
+                            <div className={`flex items-center justify-between gap-4 mt-1 ${msg.sender_id === user?.uid ? 'text-white/60' : 'text-gray-400'}`}>
+                              <p className="text-[10px]">
+                                {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                              {msg.sender_id === user?.uid && (
+                                <div className="flex">
+                                  <CheckCircle2 size={10} className={`${msg.read_at ? 'text-pex-gold' : 'text-white/40'}`} />
+                                  {msg.read_at && <CheckCircle2 size={10} className="text-pex-gold -ml-1" />}
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    </div>
-                  ))
+                      </React.Fragment>
+                    );
+                  })
                 )}
                 {isTyping && (
                   <div className="flex justify-start">
@@ -642,10 +705,7 @@ export default function PassengerApp() {
                 <input
                   type="text"
                   value={newMessage}
-                  onChange={(e) => {
-                    setNewMessage(e.target.value);
-                    handleTyping(e.target.value.length > 0);
-                  }}
+                  onChange={(e) => onInputChange(e.target.value)}
                   onBlur={() => handleTyping(false)}
                   placeholder="Type your message..."
                   className="flex-1 bg-gray-100 border-none rounded-full px-4 py-2 text-sm focus:ring-2 focus:ring-pex-blue/20 outline-none"

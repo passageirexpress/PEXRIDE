@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Bell, Send, Car, UserPlus, X } from 'lucide-react';
+import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Bell, Send, Car, UserPlus, X, VolumeX, Thermometer, History, LayoutDashboard, Navigation, ChevronRight } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useFirebase } from '../FirebaseProvider';
 import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, limit, addDoc, serverTimestamp, setDoc, getDocs } from 'firebase/firestore';
@@ -24,7 +24,7 @@ const revenueData = [
 ];
 
 interface Ride {
-  id: string;
+  id: string | number;
   passengerId: string;
   passengerName?: string;
   driverId?: string;
@@ -108,6 +108,7 @@ export default function AdminDashboard() {
   const [showHistory, setShowHistory] = useState<string | null>(null);
   const [historyData, setHistoryData] = useState<{lat: number, lng: number}[]>([]);
   const [typingUsers, setTypingUsers] = useState<{[key: string]: boolean}>({});
+  const typingTimeoutRef = useRef<{[key: string]: NodeJS.Timeout}>({});
 
   useEffect(() => {
     if (profile?.role !== 'admin') return;
@@ -151,10 +152,12 @@ export default function AdminDashboard() {
 
     socket.on('ride:updated', (updatedRide: Ride) => {
       setRides(prev => prev.map(r => r.id === updatedRide.id ? updatedRide : r));
+      addNotification(`Ride #${String(updatedRide.id).slice(0, 8)} updated to ${updatedRide.status}`, 'info');
     });
 
-    socket.on('ride:deleted', (id: string) => {
-      setRides(prev => prev.filter(r => r.id === id));
+    socket.on('ride:deleted', (id: string | number) => {
+      setRides(prev => prev.filter(r => r.id !== id));
+      addNotification(`Ride #${String(id).slice(0, 8)} removed`, 'warning');
     });
 
     socket.on('driver:location_updated', (location: DriverLocation) => {
@@ -183,13 +186,26 @@ export default function AdminDashboard() {
 
     socket.on('chat:typing', (data: { chatId: string, isTyping: boolean }) => {
       setTypingUsers(prev => ({ ...prev, [data.chatId]: data.isTyping }));
+      
+      // Auto-clear typing status after 3 seconds if no new event
+      if (data.isTyping) {
+        if (typingTimeoutRef.current[data.chatId]) {
+          clearTimeout(typingTimeoutRef.current[data.chatId]);
+        }
+        typingTimeoutRef.current[data.chatId] = setTimeout(() => {
+          setTypingUsers(prev => ({ ...prev, [data.chatId]: false }));
+        }, 3000);
+      }
     });
 
     return () => {
       socket.off('ride:requested');
+      socket.off('ride:updated');
+      socket.off('ride:deleted');
       socket.off('driver:location_updated');
       socket.off('vehicle:added');
       socket.off('vehicle:deleted');
+      socket.off('chat:typing');
     };
   }, [profile]);
 
@@ -200,6 +216,13 @@ export default function AdminDashboard() {
           const res = await fetch(`/api/chats/${selectedChat.uid}/messages`);
           const data = await res.json();
           setMessages(data);
+          
+          // Mark messages as read
+          await fetch(`/api/chats/${selectedChat.uid}/read`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: currentUser.uid }),
+          });
         } catch (err) {
           console.error('Error fetching messages:', err);
         }
@@ -211,15 +234,27 @@ export default function AdminDashboard() {
       socket.on('chat:message', (message: any) => {
         if (message.chat_id === selectedChat.uid) {
           setMessages(prev => [...prev, message]);
-          // Simulate read receipt
+          
+          // Mark as read if we are the recipient
           if (message.sender_id !== currentUser?.uid) {
-            // In a real app, we'd send a 'chat:read' event
+            fetch(`/api/chats/${selectedChat.uid}/read`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: currentUser.uid }),
+            });
           }
+        }
+      });
+
+      socket.on('chat:read', (data: { chatId: string, userId: string }) => {
+        if (data.chatId === selectedChat.uid) {
+          setMessages(prev => prev.map(m => m.sender_id === data.userId ? m : { ...m, read_at: m.read_at || new Date().toISOString() }));
         }
       });
 
       return () => {
         socket.off('chat:message');
+        socket.off('chat:read');
       };
     }
   }, [selectedChat, currentUser]);
@@ -230,13 +265,24 @@ export default function AdminDashboard() {
     }
   };
 
+  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const onInputChange = (val: string) => {
+    setNewMessage(val);
+    handleTyping(true);
+    
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = setTimeout(() => {
+      handleTyping(false);
+    }, 2000);
+  };
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
 
-  const addNotification = (message: string, type: 'info' | 'success' | 'warning') => {
+  const addNotification = (message: string, type: 'info' | 'success' | 'warning' | 'error') => {
     const id = Date.now();
     setNotifications(prev => [{ id, message, type }, ...prev].slice(0, 5));
     setTimeout(() => {
@@ -244,16 +290,16 @@ export default function AdminDashboard() {
     }, 5000);
   };
 
-  const updateRideStatus = async (rideId: string, newStatus: string, driverId?: string) => {
+  const updateRideStatus = async (rideId: string | number, newStatus: string, driverId?: string) => {
     try {
       await fetch(`/api/rides/${rideId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus, driverId }),
       });
-      addNotification(`Ride ${rideId} updated to ${newStatus}`, 'success');
     } catch (error) {
       console.error('Error updating ride status:', error);
+      addNotification('Failed to update ride status', 'error');
     }
   };
 
@@ -273,13 +319,12 @@ export default function AdminDashboard() {
     }
   };
 
-  const deleteRide = async (rideId: string) => {
-    if (!window.confirm('Are you sure you want to delete this ride record?')) return;
+  const deleteRide = async (rideId: string | number) => {
     try {
       await fetch(`/api/rides/${rideId}`, { method: 'DELETE' });
-      addNotification(`Ride ${rideId} deleted`, 'warning');
     } catch (error) {
       console.error('Error deleting ride:', error);
+      addNotification('Failed to delete ride', 'error');
     }
   };
 
@@ -296,6 +341,7 @@ export default function AdminDashboard() {
         }),
       });
       setNewMessage('');
+      handleTyping(false);
     } catch (error) {
       console.error('Error sending message:', error);
     }
@@ -469,15 +515,15 @@ export default function AdminDashboard() {
       <div className="flex-1 overflow-y-auto p-8">
         {activeTab === 'live-map' && (
           <div className="space-y-6">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
               <h1 className="text-2xl font-bold text-pex-blue">Live Fleet Tracking</h1>
-              <div className="flex gap-2">
-                <div className="flex bg-white rounded-lg border p-1">
+              <div className="flex items-center gap-4">
+                <div className="flex bg-gray-100 rounded-lg p-1">
                   {(['all', 'available', 'busy', 'offline'] as const).map((s) => (
                     <button
                       key={s}
                       onClick={() => setDriverStatusFilter(s)}
-                      className={`px-3 py-1 text-xs rounded-md transition-colors ${driverStatusFilter === s ? 'bg-pex-blue text-white' : 'hover:bg-gray-100 text-gray-600'}`}
+                      className={`px-4 py-1.5 text-xs font-semibold rounded-md transition-all ${driverStatusFilter === s ? 'bg-white text-pex-blue shadow-sm' : 'text-gray-500 hover:text-pex-blue'}`}
                     >
                       {s.charAt(0).toUpperCase() + s.slice(1)}
                     </button>
@@ -485,7 +531,7 @@ export default function AdminDashboard() {
                 </div>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
-                  <Input placeholder="Search driver or ride ID..." className="pl-10 w-64 bg-white" />
+                  <Input placeholder="Search driver or ride ID..." className="pl-10 w-64 bg-gray-50 border-none focus-visible:ring-pex-gold" />
                 </div>
               </div>
             </div>
@@ -530,13 +576,28 @@ export default function AdminDashboard() {
                 ))}
 
                 {/* Driver History Path */}
-                {showHistory && historyData.map((point, idx) => (
-                  <div 
-                    key={idx}
-                    className="absolute w-1.5 h-1.5 bg-pex-gold/40 rounded-full -translate-x-1/2 -translate-y-1/2"
-                    style={{ left: `${point.lng}%`, top: `${point.lat}%` }}
-                  />
-                ))}
+                {showHistory && historyData.length > 1 && (
+                  <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
+                    <polyline
+                      points={historyData.map(p => `${p.lng}%,${p.lat}%`).join(' ')}
+                      fill="none"
+                      stroke="#D4AF37"
+                      strokeWidth="2"
+                      strokeDasharray="4 2"
+                      className="opacity-60"
+                    />
+                    {historyData.map((point, idx) => (
+                      <circle
+                        key={idx}
+                        cx={`${point.lng}%`}
+                        cy={`${point.lat}%`}
+                        r="2"
+                        fill="#D4AF37"
+                        className="opacity-40"
+                      />
+                    ))}
+                  </svg>
+                )}
 
                 {/* Ride Markers */}
                 {rides.filter(r => r.status === 'requested').map((ride, idx) => (
@@ -576,7 +637,7 @@ export default function AdminDashboard() {
                       rides.map((ride) => (
                         <div key={ride.id} className="p-4 hover:bg-gray-50 transition-colors group">
                           <div className="flex justify-between items-start mb-2">
-                            <span className="font-bold text-pex-blue text-xs uppercase tracking-tighter">ID: {ride.id.slice(0, 8)}</span>
+                            <span className="font-bold text-pex-blue text-xs uppercase tracking-tighter">ID: {String(ride.id).slice(0, 8)}</span>
                             <div className="flex gap-1">
                               <Badge variant={ride.status === 'completed' ? 'default' : ride.status === 'requested' ? 'secondary' : 'destructive'} 
                                      className={ride.status === 'completed' ? 'bg-green-100 text-green-800 hover:bg-green-200' : ''}>
@@ -587,18 +648,34 @@ export default function AdminDashboard() {
                               </Button>
                             </div>
                           </div>
-                          <div className="text-sm text-gray-600 space-y-1">
-                            <p className="flex items-center gap-2 font-medium text-pex-blue"><Users size={14} /> {ride.passengerName || 'Anonymous'}</p>
-                            <p className="flex items-center gap-2"><Map size={14} /> {ride.rideType} - {ride.vehicleName}</p>
-                            <p className="flex items-center justify-between">
-                              <span className="flex items-center gap-2"><DollarSign size={14} /> €{ride.price}</span>
-                              <span className="text-[10px] text-gray-400">{ride.createdAt?.toDate ? ride.createdAt.toDate().toLocaleTimeString() : 'Just now'}</span>
-                            </p>
-                          </div>
-                          <div className="mt-3 space-y-2">
-                            <div className="flex gap-2">
+                            <div className="text-sm text-gray-600 space-y-1">
+                              <p className="flex items-center gap-2 font-medium text-pex-blue"><Users size={14} /> {ride.passengerName || 'Anonymous'}</p>
+                              <p className="flex items-center gap-2"><Map size={14} /> {ride.rideType} - {ride.vehicleName}</p>
+                              {ride.preferences && (
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                  {ride.preferences.silentMode && (
+                                    <Badge variant="outline" className="text-[10px] border-pex-gold/30 text-pex-gold bg-pex-gold/5">
+                                      <VolumeX size={10} className="mr-1" /> Silent Mode
+                                    </Badge>
+                                  )}
+                                  <Badge variant="outline" className="text-[10px] border-pex-blue/30 text-pex-blue bg-pex-blue/5">
+                                    <Thermometer size={10} className="mr-1" /> {ride.preferences.temperature}°C
+                                  </Badge>
+                                  <Badge variant="outline" className="text-[10px] border-pex-gold/30 text-pex-gold bg-pex-gold/5 uppercase">
+                                    {ride.preferences.tripType}
+                                  </Badge>
+                                </div>
+                              )}
+                              <p className="flex items-center justify-between">
+                                <span className="flex items-center gap-2"><DollarSign size={14} /> €{ride.price}</span>
+                                <span className="text-[10px] text-gray-400">{ride.createdAt ? new Date(ride.createdAt).toLocaleTimeString() : 'Just now'}</span>
+                              </p>
+                            </div>
+                          <div className="mt-4 space-y-3 bg-gray-50 p-3 rounded-lg border border-gray-100">
+                            <div className="flex flex-col gap-2">
+                              <Label className="text-[10px] uppercase text-gray-400 font-bold">Update Status</Label>
                               <select 
-                                className="flex-1 h-7 text-[10px] rounded-md border border-input bg-background px-2"
+                                className="w-full h-8 text-xs rounded-md border border-gray-200 bg-white px-2 focus:ring-1 focus:ring-pex-gold outline-none"
                                 value={ride.status}
                                 onChange={(e) => updateRideStatus(ride.id, e.target.value)}
                               >
@@ -608,14 +685,17 @@ export default function AdminDashboard() {
                                 <option value="completed">Completed</option>
                                 <option value="cancelled">Cancelled</option>
                               </select>
-                              
-                              {ride.status === 'requested' && (
+                            </div>
+                            
+                            {ride.status === 'requested' && (
+                              <div className="flex flex-col gap-2">
+                                <Label className="text-[10px] uppercase text-gray-400 font-bold">Assign Available Driver</Label>
                                 <select 
-                                  className="flex-1 h-7 text-[10px] rounded-md border border-input bg-background px-2"
+                                  className="w-full h-8 text-xs rounded-md border border-gray-200 bg-white px-2 focus:ring-1 focus:ring-pex-gold outline-none"
                                   onChange={(e) => updateRideStatus(ride.id, 'assigned', e.target.value)}
                                   defaultValue=""
                                 >
-                                  <option value="" disabled>Assign Driver</option>
+                                  <option value="" disabled>Select Driver...</option>
                                   {driverLocations
                                     .filter(d => d.status === 'available')
                                     .map(d => (
@@ -623,18 +703,20 @@ export default function AdminDashboard() {
                                     ))
                                   }
                                 </select>
-                              )}
-                            </div>
-                            
-                            {ride.status === 'requested' && (
-                              <div className="flex gap-2">
-                                <Button size="sm" className="flex-1 h-7 text-[10px] bg-green-600 hover:bg-green-700 text-white" onClick={() => updateRideStatus(ride.id, 'assigned')}>Quick Assign</Button>
-                                <Button size="sm" variant="outline" className="flex-1 h-7 text-[10px]" onClick={() => updateRideStatus(ride.id, 'cancelled')}>Cancel</Button>
                               </div>
                             )}
-                            {ride.status === 'assigned' && (
-                              <Button size="sm" className="w-full h-7 text-[10px] bg-pex-blue hover:bg-pex-blue/90 text-white" onClick={() => updateRideStatus(ride.id, 'completed')}>Mark Completed</Button>
-                            )}
+                            
+                            <div className="flex gap-2 pt-1 border-t border-gray-200 mt-2">
+                              {ride.status === 'requested' && (
+                                <>
+                                  <Button size="sm" className="flex-1 h-8 text-[10px] bg-green-600 hover:bg-green-700 text-white font-bold" onClick={() => updateRideStatus(ride.id, 'assigned')}>Quick Assign</Button>
+                                  <Button size="sm" variant="outline" className="flex-1 h-8 text-[10px] border-red-200 text-red-600 hover:bg-red-50" onClick={() => updateRideStatus(ride.id, 'cancelled')}>Cancel Ride</Button>
+                                </>
+                              )}
+                              {ride.status === 'assigned' && (
+                                <Button size="sm" className="w-full h-8 text-[10px] bg-pex-blue hover:bg-pex-blue/90 text-white font-bold" onClick={() => updateRideStatus(ride.id, 'completed')}>Mark as Completed</Button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       ))
@@ -786,23 +868,40 @@ export default function AdminDashboard() {
                     <Badge className="bg-green-500">Live</Badge>
                   </CardHeader>
                     <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-4 bg-gray-50">
-                      {messages.map((msg) => (
-                        <div key={msg.id} className={`flex ${msg.sender_id === currentUser?.uid ? 'justify-end' : 'justify-start'}`}>
-                          <div className={`max-w-[70%] p-3 rounded-2xl shadow-sm ${
-                            msg.sender_id === currentUser?.uid ? 'bg-pex-blue text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none'
-                          }`}>
-                            <p className="text-sm">{msg.text}</p>
-                            <div className={`flex items-center justify-between gap-4 mt-1 ${msg.sender_id === currentUser?.uid ? 'text-white/60' : 'text-gray-400'}`}>
-                              <p className="text-[10px]">
-                                {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </p>
-                              {msg.sender_id === currentUser?.uid && (
-                                <CheckCircle2 size={10} className="text-pex-gold" />
-                              )}
+                      {messages.map((msg, idx) => {
+                        const prevMsg = messages[idx - 1];
+                        const showDate = !prevMsg || new Date(msg.created_at).toDateString() !== new Date(prevMsg.created_at).toDateString();
+                        
+                        return (
+                          <React.Fragment key={msg.id}>
+                            {showDate && (
+                              <div className="flex justify-center my-4">
+                                <span className="px-3 py-1 bg-gray-200 text-gray-500 text-[10px] rounded-full uppercase tracking-wider font-bold">
+                                  {new Date(msg.created_at).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}
+                                </span>
+                              </div>
+                            )}
+                            <div className={`flex ${msg.sender_id === currentUser?.uid ? 'justify-end' : 'justify-start'}`}>
+                              <div className={`max-w-[70%] p-3 rounded-2xl shadow-sm ${
+                                msg.sender_id === currentUser?.uid ? 'bg-pex-blue text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none'
+                              }`}>
+                                <p className="text-sm">{msg.text}</p>
+                                <div className={`flex items-center justify-between gap-4 mt-1 ${msg.sender_id === currentUser?.uid ? 'text-white/60' : 'text-gray-400'}`}>
+                                  <p className="text-[10px]">
+                                    {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </p>
+                                  {msg.sender_id === currentUser?.uid && (
+                                    <div className="flex">
+                                      <CheckCircle2 size={10} className={`${msg.read_at ? 'text-pex-gold' : 'text-white/40'}`} />
+                                      {msg.read_at && <CheckCircle2 size={10} className="text-pex-gold -ml-1" />}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      ))}
+                          </React.Fragment>
+                        );
+                      })}
                       {typingUsers[selectedChat.uid] && (
                         <div className="flex justify-start">
                           <div className="bg-white text-gray-400 p-2 rounded-2xl rounded-tl-none shadow-sm text-[10px] italic flex items-center gap-2">
@@ -820,10 +919,7 @@ export default function AdminDashboard() {
                       <div className="flex gap-2">
                         <Input 
                           value={newMessage} 
-                          onChange={e => {
-                            setNewMessage(e.target.value);
-                            handleTyping(e.target.value.length > 0);
-                          }}
+                          onChange={e => onInputChange(e.target.value)}
                           onBlur={() => handleTyping(false)}
                           onKeyPress={e => e.key === 'Enter' && sendMessage()}
                           placeholder="Type your message..." 
