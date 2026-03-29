@@ -150,7 +150,7 @@ export default function AdminDashboard() {
 
   // Driver Registration States
   const [isAddingDriver, setIsAddingDriver] = useState(false);
-  const [newDriver, setNewDriver] = useState({ displayName: '', email: '', phoneNumber: '' });
+  const [newDriver, setNewDriver] = useState({ displayName: '', email: '', phoneNumber: '', licenseNumber: '' });
   
   // Filtering & History States
   const [driverStatusFilter, setDriverStatusFilter] = useState<'all' | 'available' | 'busy' | 'offline'>('all');
@@ -513,6 +513,8 @@ export default function AdminDashboard() {
           uid: driverId,
           displayName: newDriver.displayName,
           email: newDriver.email,
+          phoneNumber: newDriver.phoneNumber,
+          licenseNumber: newDriver.licenseNumber,
           role: 'driver',
           status: 'pending', // New drivers start as pending
         }),
@@ -596,6 +598,19 @@ export default function AdminDashboard() {
     );
   }
 
+  // Helper to format duration
+  const formatDuration = (start: string | null, end: string | null) => {
+    if (!start) return null;
+    const startTime = new Date(start).getTime();
+    const endTime = end ? new Date(end).getTime() : Date.now();
+    const diffMs = endTime - startTime;
+    const diffMins = Math.floor(diffMs / 60000);
+    const hours = Math.floor(diffMins / 60);
+    const mins = diffMins % 60;
+    if (hours > 0) return `${hours}h ${mins}m`;
+    return `${mins}m`;
+  };
+
   const totalRevenue = rides
     .filter(r => r.status === 'completed')
     .reduce((sum, r) => sum + (r.price || 0), 0);
@@ -654,6 +669,13 @@ export default function AdminDashboard() {
             >
               <Map size={18} />
               <span className="text-sm font-medium">Live Map</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('ride-history')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'ride-history' ? 'bg-white/10 text-pex-gold' : 'hover:bg-white/5'}`}
+            >
+              <Map size={18} />
+              <span className="text-sm font-medium">Ride History</span>
             </button>
             <button 
               onClick={() => setActiveTab('poi-manager')}
@@ -835,28 +857,65 @@ export default function AdminDashboard() {
                 )}
 
                 {/* Ride Markers */}
-                {rides.filter(r => r.status === 'requested').map((ride, idx) => (
-                  <div 
-                    key={ride.id}
-                    className="absolute w-4 h-4 bg-red-500 rounded-full border-2 border-white shadow-lg animate-bounce group cursor-pointer"
-                    style={{ left: `${20 + idx * 15}%`, top: `${30 + idx * 10}%` }}
-                  >
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-red-600 text-white text-[8px] px-2 py-0.5 rounded whitespace-nowrap">
-                      New Request
-                    </div>
-                    
-                    {/* Tooltip */}
-                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-48 bg-white text-pex-blue p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-red-100">
-                      <p className="font-bold text-xs mb-1">Ride Request</p>
-                      <p className="text-[10px] text-gray-500 mb-1">From: {ride.pickupLocation}</p>
-                      <p className="text-[10px] text-gray-500 mb-2">To: {ride.dropoffLocation}</p>
-                      <div className="flex justify-between items-center text-[10px] font-bold text-pex-gold">
-                        <span>€{ride.price}</span>
-                        <span>{ride.rideType}</span>
+                {rides.filter(r => r.status === 'requested' || r.status === 'in_progress').map((ride, idx) => {
+                  const seed = ride.id * 10;
+                  const lat1 = 30 + (seed % 40);
+                  const lng1 = 20 + ((seed * 3) % 60);
+                  const lat2 = 35 + ((seed * 2) % 35);
+                  const lng2 = 25 + ((seed * 5) % 55);
+                  
+                  return (
+                  <div key={ride.id}>
+                    {/* Pickup Marker */}
+                    <div 
+                      className={`absolute w-4 h-4 rounded-full border-2 border-white shadow-lg group cursor-pointer ${ride.status === 'requested' ? 'bg-red-500 animate-bounce' : 'bg-blue-500'}`}
+                      style={{ left: `${lng1}%`, top: `${lat1}%` }}
+                    >
+                      <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-1 text-white text-[8px] px-2 py-0.5 rounded whitespace-nowrap ${ride.status === 'requested' ? 'bg-red-600' : 'bg-blue-600'}`}>
+                        {ride.status === 'requested' ? 'New Request' : 'Pickup'}
+                      </div>
+                      
+                      {/* Tooltip */}
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-48 bg-white text-pex-blue p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-gray-100">
+                        <p className="font-bold text-xs mb-1">Ride {ride.status === 'requested' ? 'Request' : 'In Progress'}</p>
+                        <p className="text-[10px] text-gray-500 mb-1">From: {ride.pickupLocation}</p>
+                        <p className="text-[10px] text-gray-500 mb-2">To: {ride.dropoffLocation}</p>
+                        <div className="flex justify-between items-center text-[10px] font-bold text-pex-gold">
+                          <span>€{ride.price}</span>
+                          <span>{ride.rideType}</span>
+                        </div>
                       </div>
                     </div>
+
+                    {/* Dropoff Marker (only for in_progress) */}
+                    {ride.status === 'in_progress' && (
+                      <>
+                        <div 
+                          className="absolute w-4 h-4 bg-green-500 rounded-full border-2 border-white shadow-lg group cursor-pointer"
+                          style={{ left: `${lng2}%`, top: `${lat2}%` }}
+                        >
+                          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 bg-green-600 text-white text-[8px] px-2 py-0.5 rounded whitespace-nowrap">
+                            Dropoff
+                          </div>
+                          
+                          {/* Tooltip */}
+                          <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-48 bg-white text-pex-blue p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-gray-100">
+                            <p className="font-bold text-xs mb-1">Ride Dropoff</p>
+                            <p className="text-[10px] text-gray-500 mb-1">To: {ride.dropoffLocation}</p>
+                          </div>
+                        </div>
+                        {/* Connecting Line */}
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible z-10">
+                          <line
+                            x1={`${lng1}%`} y1={`${lat1}%`}
+                            x2={`${lng2}%`} y2={`${lat2}%`}
+                            stroke="#3B82F6" strokeWidth="2" strokeDasharray="4 4" className="opacity-50"
+                          />
+                        </svg>
+                      </>
+                    )}
                   </div>
-                ))}
+                )})}
               </Card>
 
               {/* Active Rides List */}
@@ -906,7 +965,15 @@ export default function AdminDashboard() {
                               )}
                               <p className="flex items-center justify-between">
                                 <span className="flex items-center gap-2"><DollarSign size={14} /> €{ride.price}</span>
-                                <span className="text-[10px] text-gray-400">{ride.createdAt ? new Date(ride.createdAt).toLocaleTimeString() : 'Just now'}</span>
+                                <div className="flex flex-col items-end">
+                                  <span className="text-[10px] text-gray-400">{ride.createdAt ? new Date(ride.createdAt).toLocaleTimeString() : 'Just now'}</span>
+                                  {(ride.startedAt || ride.status === 'in_progress' || ride.status === 'completed') && (
+                                    <span className="text-[10px] text-pex-gold font-medium mt-1">
+                                      Duration: {formatDuration(ride.startedAt, ride.completedAt)}
+                                      {ride.status === 'in_progress' && ' (est.)'}
+                                    </span>
+                                  )}
+                                </div>
                               </p>
                             </div>
                           <div className="mt-4 space-y-3 bg-gray-50 p-3 rounded-lg border border-gray-100">
@@ -1253,6 +1320,10 @@ export default function AdminDashboard() {
                       <Label>Phone Number</Label>
                       <Input value={newDriver.phoneNumber} onChange={e => setNewDriver({...newDriver, phoneNumber: e.target.value})} placeholder="+351 912 345 678" />
                     </div>
+                    <div className="space-y-2">
+                      <Label>Driver's License</Label>
+                      <Input value={newDriver.licenseNumber} onChange={e => setNewDriver({...newDriver, licenseNumber: e.target.value})} placeholder="AB123456" />
+                    </div>
                   </div>
                   <div className="pt-4">
                     <Button className="w-full bg-pex-blue text-white h-12 text-lg" onClick={() => {
@@ -1525,6 +1596,59 @@ export default function AdminDashboard() {
                   </LineChart>
                 </ResponsiveContainer>
               </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === 'ride-history' && (
+          <div className="space-y-6">
+            <h1 className="text-2xl font-bold text-pex-blue">Ride History</h1>
+            <Card className="p-6 bg-white border-pex-blue/30">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-gray-500 uppercase bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3">ID</th>
+                      <th className="px-4 py-3">Date</th>
+                      <th className="px-4 py-3">Passenger</th>
+                      <th className="px-4 py-3">Driver</th>
+                      <th className="px-4 py-3">Route</th>
+                      <th className="px-4 py-3">Price</th>
+                      <th className="px-4 py-3">Duration</th>
+                      <th className="px-4 py-3">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rides.filter(r => r.status === 'completed' || r.status === 'cancelled').map((ride) => (
+                      <tr key={ride.id} className="border-b border-gray-100 hover:bg-gray-50">
+                        <td className="px-4 py-3 font-mono text-xs">{String(ride.id).slice(0, 8)}</td>
+                        <td className="px-4 py-3">{new Date(ride.createdAt).toLocaleDateString()}</td>
+                        <td className="px-4 py-3 font-medium text-pex-blue">{ride.passengerName || 'Anonymous'}</td>
+                        <td className="px-4 py-3">{ride.driverName || '-'}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col gap-1 text-xs">
+                            <span className="text-gray-500 truncate max-w-[200px]">From: {ride.pickupLocation}</span>
+                            <span className="text-gray-500 truncate max-w-[200px]">To: {ride.dropoffLocation}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 font-medium text-pex-gold">€{ride.price}</td>
+                        <td className="px-4 py-3 text-gray-500">{formatDuration(ride.startedAt, ride.completedAt) || '-'}</td>
+                        <td className="px-4 py-3">
+                          <Badge variant={ride.status === 'completed' ? 'default' : 'destructive'} 
+                                 className={ride.status === 'completed' ? 'bg-green-100 text-green-800' : ''}>
+                            {ride.status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                    {rides.filter(r => r.status === 'completed' || r.status === 'cancelled').length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="px-4 py-8 text-center text-gray-400">No ride history found</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </Card>
           </div>
         )}

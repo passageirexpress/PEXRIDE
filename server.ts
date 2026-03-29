@@ -57,6 +57,8 @@ async function startServer() {
         role TEXT DEFAULT 'passenger',
         status TEXT DEFAULT 'active',
         photo_url TEXT,
+        phone_number TEXT,
+        license_number TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `;
@@ -74,9 +76,17 @@ async function startServer() {
         vehicle_name TEXT,
         price NUMERIC,
         preferences JSONB,
+        started_at TIMESTAMP WITH TIME ZONE,
+        completed_at TIMESTAMP WITH TIME ZONE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    
+    // Add columns if they don't exist (for existing databases)
+    try { await sql`ALTER TABLE users ADD COLUMN phone_number TEXT;`; } catch (e) {}
+    try { await sql`ALTER TABLE users ADD COLUMN license_number TEXT;`; } catch (e) {}
+    try { await sql`ALTER TABLE rides ADD COLUMN started_at TIMESTAMP WITH TIME ZONE;`; } catch (e) {}
+    try { await sql`ALTER TABLE rides ADD COLUMN completed_at TIMESTAMP WITH TIME ZONE;`; } catch (e) {}
     await sql`
       CREATE TABLE IF NOT EXISTS vehicles (
         id SERIAL PRIMARY KEY,
@@ -242,16 +252,18 @@ async function startServer() {
 
   // User Routes
   app.post('/api/users', async (req, res) => {
-    const { uid, email, displayName, role, photoURL, status } = req.body;
+    const { uid, email, displayName, role, photoURL, status, phoneNumber, licenseNumber } = req.body;
     try {
       const { rows } = await sql`
-        INSERT INTO users (uid, email, display_name, role, photo_url, status)
-        VALUES (${uid}, ${email}, ${displayName}, ${role}, ${photoURL}, ${status || 'active'})
+        INSERT INTO users (uid, email, display_name, role, photo_url, status, phone_number, license_number)
+        VALUES (${uid}, ${email}, ${displayName}, ${role}, ${photoURL}, ${status || 'active'}, ${phoneNumber}, ${licenseNumber})
         ON CONFLICT (uid) DO UPDATE SET
           email = EXCLUDED.email,
           display_name = EXCLUDED.display_name,
           photo_url = EXCLUDED.photo_url,
-          status = COALESCE(EXCLUDED.status, users.status)
+          status = COALESCE(EXCLUDED.status, users.status),
+          phone_number = COALESCE(EXCLUDED.phone_number, users.phone_number),
+          license_number = COALESCE(EXCLUDED.license_number, users.license_number)
         RETURNING 
           id, 
           uid, 
@@ -259,6 +271,8 @@ async function startServer() {
           display_name as "displayName", 
           role, 
           status,
+          phone_number as "phoneNumber",
+          license_number as "licenseNumber",
           photo_url as "photoURL", 
           created_at as "createdAt";
       `;
@@ -309,6 +323,8 @@ async function startServer() {
           display_name as "displayName", 
           role, 
           status,
+          phone_number as "phoneNumber",
+          license_number as "licenseNumber",
           photo_url as "photoURL", 
           created_at as "createdAt" 
         FROM users 
@@ -386,6 +402,8 @@ async function startServer() {
           r.vehicle_name as "vehicleName", 
           r.price, 
           r.preferences,
+          r.started_at as "startedAt",
+          r.completed_at as "completedAt",
           r.created_at as "createdAt" 
         FROM rides r
         LEFT JOIN users u ON r.driver_id = u.uid
@@ -406,7 +424,9 @@ async function startServer() {
       const { rows } = await sql`
         UPDATE rides 
         SET status = COALESCE(${status}, status), 
-            driver_id = COALESCE(${driverId}, driver_id)
+            driver_id = COALESCE(${driverId}, driver_id),
+            started_at = CASE WHEN ${status} = 'in_progress' AND started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END,
+            completed_at = CASE WHEN ${status} = 'completed' AND completed_at IS NULL THEN CURRENT_TIMESTAMP ELSE completed_at END
         WHERE id = ${id}
         RETURNING 
           id, 
@@ -418,6 +438,8 @@ async function startServer() {
           vehicle_name as "vehicleName", 
           price, 
           preferences,
+          started_at as "startedAt",
+          completed_at as "completedAt",
           created_at as "createdAt";
       `;
       const ride = rows[0];
