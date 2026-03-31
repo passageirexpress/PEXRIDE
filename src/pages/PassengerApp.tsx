@@ -67,6 +67,26 @@ export default function PassengerApp() {
     }, 5000);
   };
 
+  const [widgetPickup, setWidgetPickup] = useState('');
+  const [widgetDropoff, setWidgetDropoff] = useState('');
+  const [widgetDate, setWidgetDate] = useState('');
+  const [widgetTime, setWidgetTime] = useState('');
+  const [widgetTripType, setWidgetTripType] = useState('one-way');
+  const [widgetDuration, setWidgetDuration] = useState('4');
+
+  const handleSearchRides = () => {
+    navigate('/book', {
+      state: {
+        pickup: widgetPickup,
+        dropoff: widgetDropoff,
+        date: widgetDate,
+        time: widgetTime,
+        tripType: widgetTripType,
+        duration: widgetDuration
+      }
+    });
+  };
+
   const fetchPois = async () => {
     setIsRefreshingPois(true);
     try {
@@ -772,13 +792,13 @@ export default function PassengerApp() {
   return (
     <div className="flex-1 flex flex-col bg-white overflow-x-hidden">
       {/* Test comment */}
-      {/* Premium Hero Section */}
-      <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden bg-pex-blue">
+      {/* Premium Hero Section with Booking Widget */}
+      <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden bg-pex-blue pt-20">
         <div className="absolute inset-0 z-0">
           <motion.div 
-            initial={{ scale: 1.1, opacity: 0 }}
-            animate={{ scale: 1, opacity: 0.4 }}
-            transition={{ duration: 2 }}
+            initial={{ scale: 1.05, opacity: 0 }}
+            animate={{ scale: 1, opacity: 0.6 }}
+            transition={{ duration: 1.5 }}
             className="w-full h-full"
           >
             <img 
@@ -788,79 +808,132 @@ export default function PassengerApp() {
               referrerPolicy="no-referrer"
             />
           </motion.div>
-          <div className="absolute inset-0 bg-gradient-to-r from-pex-blue via-pex-blue/60 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-pex-blue via-pex-blue/40 to-transparent" />
         </div>
 
-        <div className="relative z-10 max-w-7xl mx-auto px-6 w-full grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-          <div className="space-y-8">
-            <motion.div
-              initial={{ opacity: 0, x: -50 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.8 }}
-            >
-              <Badge className="bg-pex-gold/20 text-pex-gold border-pex-gold/30 px-4 py-1 mb-6 uppercase tracking-[0.2em] text-[10px] font-bold">
-                Elite Chauffeur Service
-              </Badge>
-              <h1 className="text-6xl md:text-8xl font-light text-white leading-[0.9] tracking-tight mb-6">
-                Quiet <span className="italic font-serif text-pex-gold">Luxury</span>,<br />
-                Pure Comfort.
-              </h1>
-              <p className="text-xl text-white/60 font-light max-w-lg leading-relaxed">
-                Experience the pinnacle of private transportation. Our elite chauffeur service provides safety, and punctuality across Portugal's most exclusive destinations.
-              </p>
-            </motion.div>
+        <div className="relative z-10 max-w-7xl mx-auto px-6 w-full grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+          
+          {/* Left Side: Text */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8 }}
+            className="lg:col-span-7 space-y-6 hidden md:block"
+          >
+            <h1 className="text-5xl md:text-7xl font-light text-white leading-[1.1] tracking-tight">
+              Your Premium <br />
+              <span className="font-serif italic text-pex-gold">Chauffeur Service</span>
+            </h1>
+            <p className="text-xl text-white/80 font-light max-w-lg">
+              Experience the pinnacle of private transportation. Safety, comfort, and punctuality across Portugal's most exclusive destinations.
+            </p>
+          </motion.div>
 
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4, duration: 0.8 }}
-              className="flex flex-wrap gap-4"
-            >
-              <Button 
-                size="lg" 
-                className="bg-pex-gold text-pex-blue hover:bg-white font-bold px-8 h-14 text-base rounded-full"
-                onClick={() => navigate('/book')}
-              >
-                Book Your Journey
-                <ArrowRight className="ml-2" size={18} />
-              </Button>
-              <Button 
-                variant="outline" 
-                size="lg" 
-                className="border-white/20 text-white hover:bg-white/10 px-8 h-14 text-base rounded-full"
-                onClick={() => document.getElementById('features-section')?.scrollIntoView({ behavior: 'smooth' })}
-              >
-                Explore Services
-              </Button>
-            </motion.div>
+          {/* Right Side: Booking Widget (Blacklane Style) */}
+          <motion.div 
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2, duration: 0.8 }}
+            className="lg:col-span-5 w-full"
+          >
+            <Card className="bg-white rounded-2xl shadow-2xl border-0 overflow-hidden">
+              <div className="flex border-b border-gray-100">
+                <button 
+                  className={`flex-1 py-4 text-sm font-bold transition-colors ${widgetTripType === 'one-way' ? 'text-pex-blue border-b-2 border-pex-gold' : 'text-gray-400 hover:text-gray-600'}`}
+                  onClick={() => setWidgetTripType('one-way')}
+                >
+                  ONE WAY
+                </button>
+                <button 
+                  className={`flex-1 py-4 text-sm font-bold transition-colors ${widgetTripType === 'hourly' ? 'text-pex-blue border-b-2 border-pex-gold' : 'text-gray-400 hover:text-gray-600'}`}
+                  onClick={() => setWidgetTripType('hourly')}
+                >
+                  BY THE HOUR
+                </button>
+              </div>
+              
+              <CardContent className="p-6 space-y-4">
+                <div className="relative space-y-4">
+                  {/* Timeline line */}
+                  <div className="absolute left-3.5 top-5 bottom-5 w-0.5 bg-gray-200 z-0"></div>
+                  
+                  <div className="relative z-10 flex items-center gap-3">
+                    <div className="w-7 h-7 rounded-full bg-pex-blue/10 flex items-center justify-center flex-shrink-0">
+                      <div className="w-2 h-2 rounded-full bg-pex-blue"></div>
+                    </div>
+                    <Input 
+                      placeholder="Pick-up location" 
+                      className="h-12 bg-gray-50 border-transparent focus-visible:ring-pex-gold focus-visible:bg-white text-base"
+                      value={widgetPickup}
+                      onChange={(e) => setWidgetPickup(e.target.value)}
+                    />
+                  </div>
 
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.8 }}
-              className="grid grid-cols-3 gap-8 pt-12 border-t border-white/10 max-w-md"
-            >
-              <div>
-                <p className="text-2xl font-bold text-white">100%</p>
-                <p className="text-[10px] uppercase tracking-widest text-white/40 font-bold">Punctuality</p>
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-white">5.0</p>
-                <p className="text-[10px] uppercase tracking-widest text-white/40 font-bold">Avg Rating</p>
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-white">24/7</p>
-                <p className="text-[10px] uppercase tracking-widest text-white/40 font-bold">Concierge</p>
-              </div>
-            </motion.div>
-          </div>
+                  {widgetTripType === 'one-way' ? (
+                    <div className="relative z-10 flex items-center gap-3">
+                      <div className="w-7 h-7 rounded-full bg-pex-gold/10 flex items-center justify-center flex-shrink-0">
+                        <MapPin size={14} className="text-pex-gold" />
+                      </div>
+                      <Input 
+                        placeholder="Drop-off location" 
+                        className="h-12 bg-gray-50 border-transparent focus-visible:ring-pex-gold focus-visible:bg-white text-base"
+                        value={widgetDropoff}
+                        onChange={(e) => setWidgetDropoff(e.target.value)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="relative z-10 flex items-center gap-3">
+                      <div className="w-7 h-7 rounded-full bg-pex-gold/10 flex items-center justify-center flex-shrink-0">
+                        <Clock size={14} className="text-pex-gold" />
+                      </div>
+                      <select 
+                        className="flex h-12 w-full items-center justify-between rounded-md border border-transparent bg-gray-50 px-3 py-2 text-base ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-pex-gold focus:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                        value={widgetDuration}
+                        onChange={(e) => setWidgetDuration(e.target.value)}
+                      >
+                        {[2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
+                          <option key={h} value={h}>{h} hours</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 pt-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-gray-500 font-bold uppercase tracking-wider">Date</Label>
+                    <Input 
+                      type="date" 
+                      className="h-12 bg-gray-50 border-transparent focus-visible:ring-pex-gold"
+                      value={widgetDate}
+                      onChange={(e) => setWidgetDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-gray-500 font-bold uppercase tracking-wider">Time</Label>
+                    <Input 
+                      type="time" 
+                      className="h-12 bg-gray-50 border-transparent focus-visible:ring-pex-gold"
+                      value={widgetTime}
+                      onChange={(e) => setWidgetTime(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <Button 
+                  className="w-full h-14 mt-4 bg-pex-blue hover:bg-pex-blue/90 text-white text-lg font-bold rounded-xl"
+                  onClick={handleSearchRides}
+                >
+                  Search Rides
+                </Button>
+              </CardContent>
+            </Card>
+          </motion.div>
         </div>
       </section>
 
-      {user && (
-        <>
-          {/* Features Section */}
-          <section id="features-section" className="py-24 bg-white">
+      {/* Features Section */}
+      <section id="features-section" className="py-24 bg-white">
             <div className="max-w-7xl mx-auto px-6">
               <div className="text-center max-w-3xl mx-auto mb-20">
                 <h2 className="text-4xl font-light text-pex-blue mb-6">Uncompromising Standards</h2>
@@ -1012,8 +1085,6 @@ export default function PassengerApp() {
               </div>
             </div>
           </section>
-        </>
-      )}
 
       {/* Booking section removed */}
 

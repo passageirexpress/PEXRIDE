@@ -33,24 +33,50 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useFirebase } from '../FirebaseProvider';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet';
+import L from 'leaflet';
+
+// Fix Leaflet's default icon path issues
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+});
+
+function MapUpdater({ center, bounds }: { center?: [number, number], bounds?: [number, number][] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (bounds && bounds.length > 0) {
+      map.fitBounds(bounds as L.LatLngBoundsExpression, { padding: [20, 20] });
+    } else if (center) {
+      map.setView(center, 13);
+    }
+  }, [center, bounds, map]);
+  return null;
+}
 
 export default function BookingPage() {
   const { user, profile } = useFirebase();
   const navigate = useNavigate();
+  const location = useLocation();
+  const state = location.state as any;
   
-  const [pickup, setPickup] = useState('');
-  const [dropoff, setDropoff] = useState('');
+  const [pickup, setPickup] = useState(state?.pickup || '');
+  const [dropoff, setDropoff] = useState(state?.dropoff || '');
   const [pickupSuggestions, setPickupSuggestions] = useState<any[]>([]);
   const [dropoffSuggestions, setDropoffSuggestions] = useState<any[]>([]);
   const [pickupCoords, setPickupCoords] = useState<{lat: number, lon: number} | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<{lat: number, lon: number} | null>(null);
   const [distance, setDistance] = useState<number | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<[number, number][]>([]);
   
   const [selectedVehicleIdx, setSelectedVehicleIdx] = useState(0);
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
-  const [tripType, setTripType] = useState('one-way');
+  const [tripType, setTripType] = useState(state?.tripType || 'one-way');
+  const [durationHours, setDurationHours] = useState(state?.duration || '4');
   const [silentMode, setSilentMode] = useState(false);
   const [temperature, setTemperature] = useState([22]);
   const [selectedPlaylist, setSelectedPlaylist] = useState('Lounge & Jazz');
@@ -222,6 +248,7 @@ export default function BookingPage() {
           const distKm = element.distance.value / 1000;
           const durMin = element.duration.value / 60;
           console.log('Route calculated (Google):', distKm, 'km,', durMin, 'mins');
+          setRouteCoordinates([[pCoords.lat, pCoords.lon], [dCoords.lat, dCoords.lon]]);
           setDistance(distKm);
           setDuration(durMin);
           setIsGeocoding(false);
@@ -233,7 +260,7 @@ export default function BookingPage() {
       
       console.log('Falling back to OSRM...');
       // Fallback to OSRM if Google fails or returns no results
-      const osrmRes = await fetch(`https://router.project-osrm.org/route/v1/driving/${pCoords.lon},${pCoords.lat};${dCoords.lon},${dCoords.lat}?overview=false`, {
+      const osrmRes = await fetch(`https://router.project-osrm.org/route/v1/driving/${pCoords.lon},${pCoords.lat};${dCoords.lon},${dCoords.lat}?overview=full`, {
         headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
       });
       const osrmData = await osrmRes.json();
@@ -243,6 +270,14 @@ export default function BookingPage() {
         const distKm = route.distance / 1000;
         const durMin = route.duration / 60;
         console.log('Route calculated (OSRM):', distKm, 'km,', durMin, 'mins');
+        
+        if (route.geometry) {
+          const decodedCoords = decodePolyline(route.geometry);
+          setRouteCoordinates(decodedCoords);
+        } else {
+          setRouteCoordinates([[pCoords.lat, pCoords.lon], [dCoords.lat, dCoords.lon]]);
+        }
+        
         setDistance(distKm);
         setDuration(durMin);
         setIsGeocoding(false);
@@ -254,14 +289,32 @@ export default function BookingPage() {
       const dist = calculateDistance(pCoords.lat, pCoords.lon, dCoords.lat, dCoords.lon);
       const dur = dist * 2 + 5;
       console.log('Route calculated (Haversine):', dist, 'km,', dur, 'mins');
+      setRouteCoordinates([[pCoords.lat, pCoords.lon], [dCoords.lat, dCoords.lon]]);
       setDistance(dist);
       setDuration(dur);
       setIsGeocoding(false);
       return { distance: dist, duration: dur };
     }
     console.warn('Route calculation failed all methods');
+    setRouteCoordinates([[pCoords.lat, pCoords.lon], [dCoords.lat, dCoords.lon]]);
     setIsGeocoding(false);
     return null;
+  };
+
+  // Simple polyline decoder for OSRM geometry
+  const decodePolyline = (str: string, precision = 5) => {
+    let index = 0, lat = 0, lng = 0, coordinates: [number, number][] = [], shift = 0, result = 0, byte = null, latitude_change, longitude_change, factor = Math.pow(10, precision);
+    while (index < str.length) {
+      byte = null; shift = 0; result = 0;
+      do { byte = str.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+      latitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      shift = result = 0;
+      do { byte = str.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+      longitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+      lat += latitude_change; lng += longitude_change;
+      coordinates.push([lat / factor, lng / factor]);
+    }
+    return coordinates;
   };
 
   useEffect(() => {
@@ -270,9 +323,15 @@ export default function BookingPage() {
     }
   }, [pickupCoords, dropoffCoords]);
 
-  const selectedVehicle = vehicleTypes[selectedVehicleIdx] || { name: 'Business', basePrice: 15, multiplier: 1.5, pricePerKm: 0, pricePerMin: 0, minFare: 0 };
+  const selectedVehicle = vehicleTypes[selectedVehicleIdx] || { name: 'Business', basePrice: 15, multiplier: 1.5, pricePerKm: 0, pricePerMin: 0, minFare: 0, hourlyRate: 45 };
   
   const calculateTotalPrice = () => {
+    if (tripType === 'hourly') {
+      const hourlyRate = (Number(selectedVehicle.hourlyRate) || (Number(selectedVehicle.basePrice) * 3)) * (Number(selectedVehicle.multiplier) || 1);
+      const subtotal = hourlyRate * Number(durationHours);
+      return subtotal * 1.23; // Add 23% IVA
+    }
+
     const base = (Number(selectedVehicle.basePrice) || 0);
     const kmPrice = (Number(selectedVehicle.pricePerKm) || 1.5) * (distance || 0);
     const minPrice = (Number(selectedVehicle.pricePerMin) || 0.5) * (duration || 0);
@@ -291,8 +350,12 @@ export default function BookingPage() {
       navigate('/login');
       return;
     }
-    if (!pickup || !dropoff) {
+    if (tripType !== 'hourly' && (!pickup || !dropoff)) {
       setError('Please select both pickup and dropoff locations.');
+      return;
+    }
+    if (tripType === 'hourly' && !pickup) {
+      setError('Please select a pickup location.');
       return;
     }
 
@@ -332,35 +395,41 @@ export default function BookingPage() {
 
       // Geocode dropoff if missing
       let currentDropoffCoords = dropoffCoords;
-      if (!currentDropoffCoords) {
-        if (ADDRESS_COORDS[dropoff]) {
-          currentDropoffCoords = ADDRESS_COORDS[dropoff];
-          setDropoffCoords(currentDropoffCoords);
-        } else {
-          const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(dropoff)}`);
-          const data = await res.json();
-          if (data.results && data.results[0]) {
-            currentDropoffCoords = { 
-              lat: data.results[0].geometry.location.lat, 
-              lon: data.results[0].geometry.location.lng 
-            };
+      if (tripType !== 'hourly') {
+        if (!currentDropoffCoords) {
+          if (ADDRESS_COORDS[dropoff]) {
+            currentDropoffCoords = ADDRESS_COORDS[dropoff];
             setDropoffCoords(currentDropoffCoords);
           } else {
-            // Fallback to Nominatim
-            const nomRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dropoff)}&limit=1`, {
-              headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-            });
-            const nomData = await nomRes.json();
-            if (nomData && nomData[0]) {
-              currentDropoffCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
+            const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(dropoff)}`);
+            const data = await res.json();
+            if (data.results && data.results[0]) {
+              currentDropoffCoords = { 
+                lat: data.results[0].geometry.location.lat, 
+                lon: data.results[0].geometry.location.lng 
+              };
               setDropoffCoords(currentDropoffCoords);
+            } else {
+              // Fallback to Nominatim
+              const nomRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dropoff)}&limit=1`, {
+                headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
+              });
+              const nomData = await nomRes.json();
+              if (nomData && nomData[0]) {
+                currentDropoffCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
+                setDropoffCoords(currentDropoffCoords);
+              }
             }
           }
         }
-      }
 
-      if (!currentPickupCoords || !currentDropoffCoords) {
-        throw new Error('Could not find coordinates for the selected addresses. Please try a more specific address or select from the suggestions.');
+        if (!currentPickupCoords || !currentDropoffCoords) {
+          throw new Error('Could not find coordinates for the selected addresses. Please try a more specific address or select from the suggestions.');
+        }
+      } else {
+        if (!currentPickupCoords) {
+          throw new Error('Could not find coordinates for the pickup address.');
+        }
       }
 
       setIsGeocoding(false);
@@ -369,26 +438,35 @@ export default function BookingPage() {
       let finalDistance = distance;
       let finalDuration = duration;
       
-      const routeData = await calculateRoute(currentPickupCoords, currentDropoffCoords);
-      if (routeData) {
-        finalDistance = routeData.distance;
-        finalDuration = routeData.duration;
-      }
+      if (tripType !== 'hourly') {
+        const routeData = await calculateRoute(currentPickupCoords, currentDropoffCoords!);
+        if (routeData) {
+          finalDistance = routeData.distance;
+          finalDuration = routeData.duration;
+        }
 
-      if (!finalDistance || !finalDuration) {
-        throw new Error('Could not calculate distance and time for the selected route.');
+        if (!finalDistance || !finalDuration) {
+          throw new Error('Could not calculate distance and time for the selected route.');
+        }
       }
 
       // Recalculate price with final distance/duration
-      const base = (Number(selectedVehicle.basePrice) || 0);
-      const kmPrice = (Number(selectedVehicle.pricePerKm) || 1.5) * (finalDistance || 0);
-      const minPrice = (Number(selectedVehicle.pricePerMin) || 0.5) * (finalDuration || 0);
-      
-      let total = (base + kmPrice + minPrice) * (Number(selectedVehicle.multiplier) || 1);
-      
-      const minFare = (Number(selectedVehicle.minFare) || 0);
-      const subtotal = Math.max(total, minFare);
-      const finalTotalPrice = subtotal * 1.23;
+      let finalTotalPrice = 0;
+      if (tripType === 'hourly') {
+        const hourlyRate = (Number(selectedVehicle.hourlyRate) || (Number(selectedVehicle.basePrice) * 3)) * (Number(selectedVehicle.multiplier) || 1);
+        const subtotal = hourlyRate * Number(durationHours);
+        finalTotalPrice = subtotal * 1.23;
+      } else {
+        const base = (Number(selectedVehicle.basePrice) || 0);
+        const kmPrice = (Number(selectedVehicle.pricePerKm) || 1.5) * (finalDistance || 0);
+        const minPrice = (Number(selectedVehicle.pricePerMin) || 0.5) * (finalDuration || 0);
+        
+        let total = (base + kmPrice + minPrice) * (Number(selectedVehicle.multiplier) || 1);
+        
+        const minFare = (Number(selectedVehicle.minFare) || 0);
+        const subtotal = Math.max(total, minFare);
+        finalTotalPrice = subtotal * 1.23;
+      }
 
       const response = await fetch('/api/rides', {
         method: 'POST',
@@ -397,7 +475,7 @@ export default function BookingPage() {
           passengerId: user.uid,
           passengerName: user.displayName || profile?.displayName || 'Anonymous',
           pickupLocation: pickup,
-          dropoffLocation: dropoff,
+          dropoffLocation: tripType === 'hourly' ? `Hourly Booking (${durationHours}h)` : dropoff,
           rideType: selectedVehicle.name,
           vehicleName: selectedVehicle.name === 'Business' ? 'Mercedes S-Class' : selectedVehicle.name === 'SUV' ? 'Range Rover' : 'Mercedes V-Class',
           price: finalTotalPrice,
@@ -405,7 +483,8 @@ export default function BookingPage() {
             silentMode,
             temperature: temperature[0],
             playlist: selectedPlaylist,
-            tripType
+            tripType,
+            durationHours: tripType === 'hourly' ? Number(durationHours) : null
           }
         }),
       });
@@ -516,75 +595,94 @@ export default function BookingPage() {
                 </div>
 
                 <div className="relative">
-                  <Label className="text-xs uppercase tracking-widest text-gray-400 mb-2 block">Dropoff Location</Label>
-                  <div className="relative" onClick={(e) => e.stopPropagation()}>
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-blue" size={18} />
-                    <Input 
-                      placeholder="Enter destination..." 
-                      className="pl-10 h-12 bg-gray-50 border-none focus-visible:ring-pex-gold"
-                      value={dropoff}
-                      onChange={(e) => handleDropoffChange(e.target.value)}
-                      onFocus={() => {
-                        if (dropoff.length > 1) {
-                          handleDropoffChange(dropoff);
-                        }
-                      }}
-                    />
-                  </div>
-                  <AnimatePresence>
-                    {dropoffSuggestions.length > 0 && (
-                      <motion.div 
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -10 }}
-                        className="absolute z-50 w-full mt-1 bg-white border border-gray-100 rounded-lg shadow-xl overflow-hidden"
+                  <Label className="text-xs uppercase tracking-widest text-gray-400 mb-2 block">
+                    {tripType === 'hourly' ? 'Duration' : 'Dropoff Location'}
+                  </Label>
+                  {tripType === 'hourly' ? (
+                    <div className="relative">
+                      <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-blue" size={18} />
+                      <select 
+                        className="pl-10 h-12 w-full bg-gray-50 border-none focus-visible:ring-pex-gold rounded-md text-sm"
+                        value={durationHours}
+                        onChange={(e) => setDurationHours(e.target.value)}
                       >
-                        {dropoffSuggestions.map((s, i) => (
-                          <button 
-                            key={i}
-                            className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-none"
-                            onClick={async () => { 
-                              isSelectingDropoff.current = true;
-                              setDropoff(s.display_name); 
-                              if (ADDRESS_COORDS[s.display_name]) {
-                                setDropoffCoords(ADDRESS_COORDS[s.display_name]);
-                              } else if (s.isGoogle && s.place_id) {
-                                try {
-                                  const res = await fetch(`/api/maps/geocode?address=place_id:${s.place_id}`);
-                                  const data = await res.json();
-                                  if (data.results && data.results[0]) {
-                                    setDropoffCoords({ 
-                                      lat: data.results[0].geometry.location.lat, 
-                                      lon: data.results[0].geometry.location.lng 
-                                    });
-                                  }
-                                } catch (err) {
-                                  console.error('Error fetching google coords:', err);
-                                }
-                              } else if (s.isHardcoded) {
-                                try {
-                                  const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(s.display_name)}&limit=1`, {
-                                    headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-                                  });
-                                  const data = await res.json();
-                                  if (data && data[0]) {
-                                    setDropoffCoords({ lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) });
-                                  }
-                                } catch (err) {
-                                  console.error('Error fetching hardcoded coords:', err);
-                                }
-                              } else {
-                                setDropoffCoords({ lat: parseFloat(s.lat), lon: parseFloat(s.lon) });
-                              }
-                              setDropoffSuggestions([]); 
-                            }}
-                          >
-                            {s.display_name}
-                          </button>
+                        {[2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
+                          <option key={h} value={h}>{h} hours</option>
                         ))}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                      </select>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="relative" onClick={(e) => e.stopPropagation()}>
+                        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-blue" size={18} />
+                        <Input 
+                          placeholder="Enter destination..." 
+                          className="pl-10 h-12 bg-gray-50 border-none focus-visible:ring-pex-gold"
+                          value={dropoff}
+                          onChange={(e) => handleDropoffChange(e.target.value)}
+                          onFocus={() => {
+                            if (dropoff.length > 1) {
+                              handleDropoffChange(dropoff);
+                            }
+                          }}
+                        />
+                      </div>
+                      <AnimatePresence>
+                        {dropoffSuggestions.length > 0 && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            className="absolute z-50 w-full mt-1 bg-white border border-gray-100 rounded-lg shadow-xl overflow-hidden"
+                          >
+                            {dropoffSuggestions.map((s, i) => (
+                              <button 
+                                key={i}
+                                className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-none"
+                                onClick={async () => { 
+                                  isSelectingDropoff.current = true;
+                                  setDropoff(s.display_name); 
+                                  if (ADDRESS_COORDS[s.display_name]) {
+                                    setDropoffCoords(ADDRESS_COORDS[s.display_name]);
+                                  } else if (s.isGoogle && s.place_id) {
+                                    try {
+                                      const res = await fetch(`/api/maps/geocode?address=place_id:${s.place_id}`);
+                                      const data = await res.json();
+                                      if (data.results && data.results[0]) {
+                                        setDropoffCoords({ 
+                                          lat: data.results[0].geometry.location.lat, 
+                                          lon: data.results[0].geometry.location.lng 
+                                        });
+                                      }
+                                    } catch (err) {
+                                      console.error('Error fetching google coords:', err);
+                                    }
+                                  } else if (s.isHardcoded) {
+                                    try {
+                                      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(s.display_name)}&limit=1`, {
+                                        headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
+                                      });
+                                      const data = await res.json();
+                                      if (data && data[0]) {
+                                        setDropoffCoords({ lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) });
+                                      }
+                                    } catch (err) {
+                                      console.error('Error fetching hardcoded coords:', err);
+                                    }
+                                  } else {
+                                    setDropoffCoords({ lat: parseFloat(s.lat), lon: parseFloat(s.lon) });
+                                  }
+                                  setDropoffSuggestions([]); 
+                                }}
+                              >
+                                {s.display_name}
+                              </button>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -669,7 +767,7 @@ export default function BookingPage() {
                     <div className="space-y-2">
                       <Label className="text-sm font-medium text-pex-blue">Trip Type</Label>
                       <div className="grid grid-cols-2 gap-2">
-                        {['one-way', 'round-trip'].map((type) => (
+                        {['one-way', 'hourly'].map((type) => (
                           <button
                             key={type}
                             onClick={() => setTripType(type)}
@@ -679,7 +777,7 @@ export default function BookingPage() {
                                 : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                             }`}
                           >
-                            {type === 'one-way' ? 'One Way' : 'Round Trip'}
+                            {type === 'one-way' ? 'One Way' : 'By the Hour'}
                           </button>
                         ))}
                       </div>
@@ -706,6 +804,39 @@ export default function BookingPage() {
 
           {/* Right Column: Summary & Confirmation */}
           <div className="space-y-6">
+            {/* Map Placeholder */}
+            <Card className="shadow-xl border-none overflow-hidden h-64 relative">
+              {(pickupCoords || dropoffCoords) ? (
+                <MapContainer 
+                  center={pickupCoords ? [pickupCoords.lat, pickupCoords.lon] : [38.7223, -9.1393]} 
+                  zoom={12} 
+                  style={{ height: '100%', width: '100%' }}
+                  zoomControl={false}
+                >
+                  <MapUpdater 
+                    center={pickupCoords ? [pickupCoords.lat, pickupCoords.lon] : undefined}
+                    bounds={routeCoordinates.length > 0 ? routeCoordinates : undefined}
+                  />
+                  <TileLayer
+                    url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                  />
+                  {pickupCoords && <Marker position={[pickupCoords.lat, pickupCoords.lon]} />}
+                  {dropoffCoords && <Marker position={[dropoffCoords.lat, dropoffCoords.lon]} />}
+                  {routeCoordinates.length > 0 && (
+                    <Polyline positions={routeCoordinates} color="#D4AF37" weight={4} opacity={0.8} />
+                  )}
+                </MapContainer>
+              ) : (
+                <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+                  <div className="text-center space-y-2">
+                    <Navigation size={24} className="mx-auto text-gray-300" />
+                    <p className="text-xs text-gray-400 uppercase tracking-widest">Map Preview</p>
+                  </div>
+                </div>
+              )}
+            </Card>
+
             <Card className="shadow-xl border-none overflow-hidden sticky top-24">
               <CardHeader className="bg-pex-blue text-white">
                 <CardTitle className="text-lg font-light tracking-widest uppercase">Summary</CardTitle>
@@ -727,13 +858,24 @@ export default function BookingPage() {
                         <div className="w-2 h-2 rounded-full bg-pex-gold" />
                         <span className="truncate">{pickup || 'Not selected'}</span>
                       </div>
-                      <div className="w-px h-4 bg-gray-200 ml-1" />
-                      <div className="flex items-center gap-2 text-sm text-pex-blue">
-                        <div className="w-2 h-2 rounded-full bg-pex-blue" />
-                        <span className="truncate">{dropoff || 'Not selected'}</span>
-                      </div>
+                      {tripType !== 'hourly' && (
+                        <>
+                          <div className="w-px h-4 bg-gray-200 ml-1" />
+                          <div className="flex items-center gap-2 text-sm text-pex-blue">
+                            <div className="w-2 h-2 rounded-full bg-pex-blue" />
+                            <span className="truncate">{dropoff || 'Not selected'}</span>
+                          </div>
+                        </>
+                      )}
                     </div>
-                    {distance !== null ? (
+                    {tripType === 'hourly' ? (
+                      <div className="flex gap-4 mt-2 text-[10px] text-gray-500 uppercase tracking-widest">
+                        <div className="flex items-center gap-1">
+                          <Clock size={10} className="text-pex-gold" />
+                          {durationHours} hours
+                        </div>
+                      </div>
+                    ) : distance !== null ? (
                       <div className="flex gap-4 mt-2 text-[10px] text-gray-500 uppercase tracking-widest">
                         <div className="flex items-center gap-1">
                           <Navigation size={10} className="text-pex-gold" />
@@ -756,21 +898,36 @@ export default function BookingPage() {
                   </div>
 
                     <div className="pt-4 border-t border-gray-100">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="text-sm text-gray-500">Base Fare</span>
-                        <span className="text-sm font-medium">€{(Number(selectedVehicle.basePrice || selectedVehicle.base_price || 0) * (Number(selectedVehicle.multiplier) || 1)).toFixed(2)}</span>
-                      </div>
-                      {distance !== null && (
-                        <div className="flex justify-between items-center mb-1">
-                          <span className="text-sm text-gray-500">Distance ({distance.toFixed(1)} km)</span>
-                          <span className="text-sm font-medium">€{(distance * (Number(selectedVehicle.pricePerKm) || 1.5) * (Number(selectedVehicle.multiplier) || 1)).toFixed(2)}</span>
-                        </div>
-                      )}
-                      {duration !== null && (
-                        <div className="flex justify-between items-center mb-1">
-                          <span className="text-sm text-gray-500">Duration ({Math.round(duration)} min)</span>
-                          <span className="text-sm font-medium">€{(duration * (Number(selectedVehicle.pricePerMin) || 0.5) * (Number(selectedVehicle.multiplier) || 1)).toFixed(2)}</span>
-                        </div>
+                      {tripType === 'hourly' ? (
+                        <>
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="text-sm text-gray-500">Hourly Rate</span>
+                            <span className="text-sm font-medium">€{((Number(selectedVehicle.hourlyRate) || (Number(selectedVehicle.basePrice) * 3)) * (Number(selectedVehicle.multiplier) || 1)).toFixed(2)}/h</span>
+                          </div>
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="text-sm text-gray-500">Duration</span>
+                            <span className="text-sm font-medium">{durationHours} hours</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="text-sm text-gray-500">Base Fare</span>
+                            <span className="text-sm font-medium">€{(Number(selectedVehicle.basePrice || selectedVehicle.base_price || 0) * (Number(selectedVehicle.multiplier) || 1)).toFixed(2)}</span>
+                          </div>
+                          {distance !== null && (
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="text-sm text-gray-500">Distance ({distance.toFixed(1)} km)</span>
+                              <span className="text-sm font-medium">€{(distance * (Number(selectedVehicle.pricePerKm) || 1.5) * (Number(selectedVehicle.multiplier) || 1)).toFixed(2)}</span>
+                            </div>
+                          )}
+                          {duration !== null && (
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="text-sm text-gray-500">Duration ({Math.round(duration)} min)</span>
+                              <span className="text-sm font-medium">€{(duration * (Number(selectedVehicle.pricePerMin) || 0.5) * (Number(selectedVehicle.multiplier) || 1)).toFixed(2)}</span>
+                            </div>
+                          )}
+                        </>
                       )}
                       <div className="flex justify-between items-center mb-1 pt-2 border-t border-gray-100">
                         <span className="text-sm text-gray-500">Subtotal (Excl. IVA)</span>

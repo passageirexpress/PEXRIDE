@@ -161,6 +161,7 @@ async function startServer() {
         price_per_km NUMERIC DEFAULT 0,
         price_per_min NUMERIC DEFAULT 0,
         min_fare NUMERIC DEFAULT 0,
+        hourly_rate NUMERIC DEFAULT 0,
         capacity INTEGER,
         description TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -171,6 +172,7 @@ async function startServer() {
     try { await sql`ALTER TABLE vehicle_types ADD COLUMN price_per_km NUMERIC DEFAULT 0;`; } catch (e) {}
     try { await sql`ALTER TABLE vehicle_types ADD COLUMN price_per_min NUMERIC DEFAULT 0;`; } catch (e) {}
     try { await sql`ALTER TABLE vehicle_types ADD COLUMN min_fare NUMERIC DEFAULT 0;`; } catch (e) {}
+    try { await sql`ALTER TABLE vehicle_types ADD COLUMN hourly_rate NUMERIC DEFAULT 0;`; } catch (e) {}
     
     // Seed initial settings if not exists
     await sql`
@@ -585,7 +587,7 @@ async function startServer() {
   // Vehicle Types Routes
   app.get('/api/vehicle-types', async (req, res) => {
     try {
-      const { rows } = await sql`SELECT id, name, base_price as "basePrice", multiplier, price_per_km as "pricePerKm", price_per_min as "pricePerMin", min_fare as "minFare", capacity, description FROM vehicle_types ORDER BY id ASC`;
+      const { rows } = await sql`SELECT id, name, base_price as "basePrice", multiplier, price_per_km as "pricePerKm", price_per_min as "pricePerMin", min_fare as "minFare", hourly_rate as "hourlyRate", capacity, description FROM vehicle_types ORDER BY id ASC`;
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -593,12 +595,12 @@ async function startServer() {
   });
 
   app.post('/api/vehicle-types', async (req, res) => {
-    const { name, basePrice, multiplier, pricePerKm, pricePerMin, minFare, capacity, description } = req.body;
+    const { name, basePrice, multiplier, pricePerKm, pricePerMin, minFare, hourlyRate, capacity, description } = req.body;
     try {
       const { rows } = await sql`
-        INSERT INTO vehicle_types (name, base_price, multiplier, price_per_km, price_per_min, min_fare, capacity, description)
-        VALUES (${name}, ${basePrice}, ${multiplier}, ${pricePerKm}, ${pricePerMin}, ${minFare}, ${capacity}, ${description})
-        RETURNING id, name, base_price as "basePrice", multiplier, price_per_km as "pricePerKm", price_per_min as "pricePerMin", min_fare as "minFare", capacity, description;
+        INSERT INTO vehicle_types (name, base_price, multiplier, price_per_km, price_per_min, min_fare, hourly_rate, capacity, description)
+        VALUES (${name}, ${basePrice}, ${multiplier}, ${pricePerKm}, ${pricePerMin}, ${minFare}, ${hourlyRate}, ${capacity}, ${description})
+        RETURNING id, name, base_price as "basePrice", multiplier, price_per_km as "pricePerKm", price_per_min as "pricePerMin", min_fare as "minFare", hourly_rate as "hourlyRate", capacity, description;
       `;
       res.json(rows[0]);
     } catch (err) {
@@ -608,7 +610,7 @@ async function startServer() {
 
   app.patch('/api/vehicle-types/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, basePrice, multiplier, pricePerKm, pricePerMin, minFare, capacity, description } = req.body;
+    const { name, basePrice, multiplier, pricePerKm, pricePerMin, minFare, hourlyRate, capacity, description } = req.body;
     try {
       const { rows } = await sql`
         UPDATE vehicle_types 
@@ -618,10 +620,11 @@ async function startServer() {
             price_per_km = COALESCE(${pricePerKm}, price_per_km),
             price_per_min = COALESCE(${pricePerMin}, price_per_min),
             min_fare = COALESCE(${minFare}, min_fare),
+            hourly_rate = COALESCE(${hourlyRate}, hourly_rate),
             capacity = COALESCE(${capacity}, capacity),
             description = COALESCE(${description}, description)
         WHERE id = ${id}
-        RETURNING id, name, base_price as "basePrice", multiplier, price_per_km as "pricePerKm", price_per_min as "pricePerMin", min_fare as "minFare", capacity, description;
+        RETURNING id, name, base_price as "basePrice", multiplier, price_per_km as "pricePerKm", price_per_min as "pricePerMin", min_fare as "minFare", hourly_rate as "hourlyRate", capacity, description;
       `;
       res.json(rows[0]);
     } catch (err) {

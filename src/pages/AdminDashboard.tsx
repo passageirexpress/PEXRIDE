@@ -130,7 +130,7 @@ export default function AdminDashboard() {
   // Vehicle Type States
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
   const [isAddingVehicleType, setIsAddingVehicleType] = useState(false);
-  const [newVehicleType, setNewVehicleType] = useState({ name: '', basePrice: 0, multiplier: 1.0, pricePerKm: 0, pricePerMin: 0, minFare: 0, capacity: 4, description: '' });
+  const [newVehicleType, setNewVehicleType] = useState({ name: '', basePrice: 0, multiplier: 1.0, pricePerKm: 0, pricePerMin: 0, minFare: 0, hourlyRate: 0, capacity: 4, description: '' });
   const [editingVehicleType, setEditingVehicleType] = useState<any>(null);
 
   // POI Management States
@@ -478,7 +478,7 @@ export default function AdminDashboard() {
       const data = await res.json();
       setVehicleTypes(prev => [...prev, data]);
       setIsAddingVehicleType(false);
-      setNewVehicleType({ name: '', basePrice: 0, multiplier: 1.0, pricePerKm: 0, pricePerMin: 0, minFare: 0, capacity: 4, description: '' });
+      setNewVehicleType({ name: '', basePrice: 0, multiplier: 1.0, pricePerKm: 0, pricePerMin: 0, minFare: 0, hourlyRate: 0, capacity: 4, description: '' });
       addNotification('Vehicle type added', 'success');
     } catch (error) {
       console.error('Error adding vehicle type:', error);
@@ -1464,6 +1464,10 @@ export default function AdminDashboard() {
                     <Input type="number" step="0.01" value={newVehicleType.minFare} onChange={e => setNewVehicleType({...newVehicleType, minFare: parseFloat(e.target.value)})} />
                   </div>
                   <div className="space-y-2">
+                    <Label>Hourly Rate (€)</Label>
+                    <Input type="number" step="0.01" value={newVehicleType.hourlyRate || 0} onChange={e => setNewVehicleType({...newVehicleType, hourlyRate: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
                     <Label>Capacity</Label>
                     <Input type="number" value={newVehicleType.capacity} onChange={e => setNewVehicleType({...newVehicleType, capacity: parseInt(e.target.value)})} />
                   </div>
@@ -1510,6 +1514,10 @@ export default function AdminDashboard() {
                     <Input type="number" step="0.01" value={editingVehicleType.minFare} onChange={e => setEditingVehicleType({...editingVehicleType, minFare: parseFloat(e.target.value)})} />
                   </div>
                   <div className="space-y-2">
+                    <Label>Hourly Rate (€)</Label>
+                    <Input type="number" step="0.01" value={editingVehicleType.hourlyRate || 0} onChange={e => setEditingVehicleType({...editingVehicleType, hourlyRate: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
                     <Label>Capacity</Label>
                     <Input type="number" value={editingVehicleType.capacity} onChange={e => setEditingVehicleType({...editingVehicleType, capacity: parseInt(e.target.value)})} />
                   </div>
@@ -1542,6 +1550,7 @@ export default function AdminDashboard() {
                       <div className="text-gray-500">Price/KM: <span className="text-pex-blue font-medium">€{type.pricePerKm}</span></div>
                       <div className="text-gray-500">Price/Min: <span className="text-pex-blue font-medium">€{type.pricePerMin}</span></div>
                       <div className="text-gray-500">Min Fare: <span className="text-pex-blue font-medium">€{type.minFare}</span></div>
+                      <div className="text-gray-500">Hourly Rate: <span className="text-pex-blue font-medium">€{type.hourlyRate || (type.basePrice * 3)}</span></div>
                       <div className="text-gray-500">Capacity: <span className="text-pex-blue font-medium">{type.capacity} pax</span></div>
                     </div>
                     <div className="flex gap-2">
