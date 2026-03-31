@@ -9,7 +9,7 @@ import { Mail, Github, Chrome, Apple, ArrowRight } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export default function Login() {
-  const { signInWithGoogle, signInWithEmail, signUpWithEmail } = useFirebase();
+  const { signInWithGoogle, signInWithApple, signInWithEmail, signUpWithEmail } = useFirebase();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -41,6 +41,19 @@ export default function Login() {
     }
   };
 
+  const handleAppleSignIn = async () => {
+    try {
+      await signInWithApple();
+      navigate('/');
+    } catch (err: any) {
+      if (err.message?.includes('auth/operation-not-allowed')) {
+        setError('Apple Sign-In is not yet fully configured in the Firebase Console. Please use Google or Email for now.');
+      } else {
+        setError(err.message);
+      }
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <motion.div 
@@ -48,8 +61,17 @@ export default function Login() {
         animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-md"
       >
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-pex-blue tracking-tighter mb-2 italic">PEX</h1>
+        <div className="text-center mb-8 flex flex-col items-center">
+          <img 
+            src="/logo.png" 
+            alt="Passageiro Express Luxury" 
+            className="h-16 object-contain mb-4"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+              e.currentTarget.nextElementSibling?.classList.remove('hidden');
+            }}
+          />
+          <h1 className="hidden text-4xl font-bold text-pex-blue tracking-tighter mb-2 italic">PEX</h1>
           <p className="text-gray-500 uppercase tracking-widest text-xs font-bold">Quiet Luxury Chauffeur Service</p>
         </div>
 
@@ -68,7 +90,7 @@ export default function Login() {
                 <Chrome className="mr-2 h-4 w-4" />
                 Google
               </Button>
-              <Button variant="outline" className="w-full" onClick={() => setError('Apple sign-in requires additional configuration.')}>
+              <Button variant="outline" className="w-full" onClick={handleAppleSignIn}>
                 <Apple className="mr-2 h-4 w-4" />
                 Apple
               </Button>

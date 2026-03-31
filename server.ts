@@ -141,6 +141,10 @@ async function startServer() {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    
+    // Add columns if they don't exist
+    try { await sql`ALTER TABLE pois ADD COLUMN tour_price NUMERIC DEFAULT 0;`; } catch (e) {}
+    try { await sql`ALTER TABLE pois ADD COLUMN image_url TEXT;`; } catch (e) {}
     await sql`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -154,11 +158,19 @@ async function startServer() {
         name TEXT UNIQUE NOT NULL,
         base_price NUMERIC DEFAULT 0,
         multiplier NUMERIC DEFAULT 1.0,
+        price_per_km NUMERIC DEFAULT 0,
+        price_per_min NUMERIC DEFAULT 0,
+        min_fare NUMERIC DEFAULT 0,
         capacity INTEGER,
         description TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    
+    // Add columns if they don't exist
+    try { await sql`ALTER TABLE vehicle_types ADD COLUMN price_per_km NUMERIC DEFAULT 0;`; } catch (e) {}
+    try { await sql`ALTER TABLE vehicle_types ADD COLUMN price_per_min NUMERIC DEFAULT 0;`; } catch (e) {}
+    try { await sql`ALTER TABLE vehicle_types ADD COLUMN min_fare NUMERIC DEFAULT 0;`; } catch (e) {}
     
     // Seed initial settings if not exists
     await sql`
@@ -169,12 +181,19 @@ async function startServer() {
 
     // Seed initial vehicle types
     await sql`
-      INSERT INTO vehicle_types (name, base_price, multiplier, capacity, description)
+      INSERT INTO vehicle_types (name, base_price, multiplier, price_per_km, price_per_min, min_fare, capacity, description)
       VALUES 
-        ('Business', 5.0, 1.0, 4, 'Standard luxury sedan'),
-        ('First Class', 10.0, 1.5, 3, 'Premium luxury experience'),
-        ('SUV', 8.0, 1.3, 6, 'Spacious luxury SUV')
-      ON CONFLICT (name) DO NOTHING;
+        ('Business', 5.0, 1.0, 1.5, 0.5, 15.0, 4, 'Standard luxury sedan'),
+        ('First Class', 10.0, 1.5, 2.5, 1.0, 25.0, 3, 'Premium luxury experience'),
+        ('SUV', 8.0, 1.3, 2.0, 0.8, 20.0, 6, 'Spacious luxury SUV')
+      ON CONFLICT (name) DO UPDATE SET
+        base_price = EXCLUDED.base_price,
+        multiplier = EXCLUDED.multiplier,
+        price_per_km = EXCLUDED.price_per_km,
+        price_per_min = EXCLUDED.price_per_min,
+        min_fare = EXCLUDED.min_fare,
+        capacity = EXCLUDED.capacity,
+        description = EXCLUDED.description;
     `;
 
     // Seed POIs if empty
@@ -253,17 +272,35 @@ async function startServer() {
   // User Routes
   app.post('/api/users', async (req, res) => {
     const { uid, email, displayName, role, photoURL, status, phoneNumber, licenseNumber } = req.body;
+    
+    // Server-side validation for driver's license
+    if (role === 'driver' && licenseNumber) {
+      const licenseRegex = /^[A-Z0-9]{5,15}$/; // Example format: 5-15 alphanumeric characters
+      if (!licenseRegex.test(licenseNumber)) {
+        return res.status(400).json({ error: 'Invalid driver\'s license format. Must be 5-15 alphanumeric characters.' });
+      }
+    }
+
+    // Auto-assign admin role to the specific user email
+    const isAdminEmail = email?.toLowerCase() === 'michaelsouzaxt21@gmail.com';
+    const finalRole = isAdminEmail ? 'admin' : (role || 'passenger');
+
     try {
       const { rows } = await sql`
         INSERT INTO users (uid, email, display_name, role, photo_url, status, phone_number, license_number)
-        VALUES (${uid}, ${email}, ${displayName}, ${role}, ${photoURL}, ${status || 'active'}, ${phoneNumber}, ${licenseNumber})
+        VALUES (${uid}, ${email}, ${displayName}, ${finalRole}, ${photoURL}, ${status || 'active'}, ${phoneNumber}, ${licenseNumber})
         ON CONFLICT (uid) DO UPDATE SET
           email = EXCLUDED.email,
           display_name = EXCLUDED.display_name,
           photo_url = EXCLUDED.photo_url,
           status = COALESCE(EXCLUDED.status, users.status),
           phone_number = COALESCE(EXCLUDED.phone_number, users.phone_number),
-          license_number = COALESCE(EXCLUDED.license_number, users.license_number)
+          license_number = COALESCE(EXCLUDED.license_number, users.license_number),
+          role = CASE 
+            WHEN LOWER(EXCLUDED.email) = 'michaelsouzaxt21@gmail.com' THEN 'admin'
+            WHEN users.role = 'admin' THEN 'admin' 
+            ELSE EXCLUDED.role 
+          END
         RETURNING 
           id, 
           uid, 
@@ -360,11 +397,11 @@ async function startServer() {
 
   // Ride Routes
   app.post('/api/rides', async (req, res) => {
-    const { passengerId, passengerName, pickupLocation, dropoffLocation, rideType, vehicleName, price } = req.body;
+    const { passengerId, passengerName, pickupLocation, dropoffLocation, rideType, vehicleName, price, preferences } = req.body;
     try {
       const { rows } = await sql`
-        INSERT INTO rides (passenger_id, passenger_name, pickup_location, dropoff_location, ride_type, vehicle_name, price)
-        VALUES (${passengerId}, ${passengerName}, ${pickupLocation}, ${dropoffLocation}, ${rideType}, ${vehicleName}, ${price})
+        INSERT INTO rides (passenger_id, passenger_name, pickup_location, dropoff_location, ride_type, vehicle_name, price, preferences)
+        VALUES (${passengerId}, ${passengerName}, ${pickupLocation}, ${dropoffLocation}, ${rideType}, ${vehicleName}, ${price}, ${JSON.stringify(preferences)})
         RETURNING 
           id, 
           passenger_id as "passengerId", 
@@ -375,6 +412,7 @@ async function startServer() {
           ride_type as "rideType", 
           vehicle_name as "vehicleName", 
           price, 
+          preferences,
           created_at as "createdAt";
       `;
       const ride = rows[0];
@@ -547,7 +585,7 @@ async function startServer() {
   // Vehicle Types Routes
   app.get('/api/vehicle-types', async (req, res) => {
     try {
-      const { rows } = await sql`SELECT id, name, base_price as "basePrice", multiplier, capacity, description FROM vehicle_types ORDER BY id ASC`;
+      const { rows } = await sql`SELECT id, name, base_price as "basePrice", multiplier, price_per_km as "pricePerKm", price_per_min as "pricePerMin", min_fare as "minFare", capacity, description FROM vehicle_types ORDER BY id ASC`;
       res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -555,12 +593,12 @@ async function startServer() {
   });
 
   app.post('/api/vehicle-types', async (req, res) => {
-    const { name, basePrice, multiplier, capacity, description } = req.body;
+    const { name, basePrice, multiplier, pricePerKm, pricePerMin, minFare, capacity, description } = req.body;
     try {
       const { rows } = await sql`
-        INSERT INTO vehicle_types (name, base_price, multiplier, capacity, description)
-        VALUES (${name}, ${basePrice}, ${multiplier}, ${capacity}, ${description})
-        RETURNING id, name, base_price as "basePrice", multiplier, capacity, description;
+        INSERT INTO vehicle_types (name, base_price, multiplier, price_per_km, price_per_min, min_fare, capacity, description)
+        VALUES (${name}, ${basePrice}, ${multiplier}, ${pricePerKm}, ${pricePerMin}, ${minFare}, ${capacity}, ${description})
+        RETURNING id, name, base_price as "basePrice", multiplier, price_per_km as "pricePerKm", price_per_min as "pricePerMin", min_fare as "minFare", capacity, description;
       `;
       res.json(rows[0]);
     } catch (err) {
@@ -570,17 +608,20 @@ async function startServer() {
 
   app.patch('/api/vehicle-types/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, basePrice, multiplier, capacity, description } = req.body;
+    const { name, basePrice, multiplier, pricePerKm, pricePerMin, minFare, capacity, description } = req.body;
     try {
       const { rows } = await sql`
         UPDATE vehicle_types 
         SET name = COALESCE(${name}, name),
             base_price = COALESCE(${basePrice}, base_price),
             multiplier = COALESCE(${multiplier}, multiplier),
+            price_per_km = COALESCE(${pricePerKm}, price_per_km),
+            price_per_min = COALESCE(${pricePerMin}, price_per_min),
+            min_fare = COALESCE(${minFare}, min_fare),
             capacity = COALESCE(${capacity}, capacity),
             description = COALESCE(${description}, description)
         WHERE id = ${id}
-        RETURNING id, name, base_price as "basePrice", multiplier, capacity, description;
+        RETURNING id, name, base_price as "basePrice", multiplier, price_per_km as "pricePerKm", price_per_min as "pricePerMin", min_fare as "minFare", capacity, description;
       `;
       res.json(rows[0]);
     } catch (err) {
@@ -770,6 +811,49 @@ async function startServer() {
     try {
       await sql`DELETE FROM pois WHERE id = ${id};`;
       res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Google Maps Proxy Routes
+  app.get('/api/maps/geocode', async (req, res) => {
+    const { address } = req.query;
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'Google Maps API Key not configured' });
+    
+    try {
+      const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address as string)}&key=${apiKey}`);
+      const data = await response.json();
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/maps/distance', async (req, res) => {
+    const { origins, destinations } = req.query;
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'Google Maps API Key not configured' });
+    
+    try {
+      const response = await fetch(`https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(origins as string)}&destinations=${encodeURIComponent(destinations as string)}&key=${apiKey}`);
+      const data = await response.json();
+      res.json(data);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/maps/autocomplete', async (req, res) => {
+    const { input } = req.query;
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'Google Maps API Key not configured' });
+    
+    try {
+      const response = await fetch(`https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input as string)}&key=${apiKey}`);
+      const data = await response.json();
+      res.json(data);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

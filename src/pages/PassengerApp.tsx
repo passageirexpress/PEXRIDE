@@ -14,15 +14,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { MapPin, Clock, Star, Music, Thermometer, VolumeX, Crown, Navigation, CheckCircle2, ChevronLeft, ChevronRight, User, AlertCircle, MessageCircle, Send, X, Search, RefreshCw, CreditCard, History } from 'lucide-react';
+import { MapPin, Clock, Star, Music, Thermometer, VolumeX, Crown, Navigation, CheckCircle2, ChevronLeft, ChevronRight, User, AlertCircle, MessageCircle, Send, X, Search, RefreshCw, CreditCard, History, ArrowRight, Shield, Globe, Award } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { motion, AnimatePresence } from 'motion/react';
 import { useFirebase } from '../FirebaseProvider';
 import { socket } from '../lib/socket';
+import { useNavigate } from 'react-router-dom';
 
 export default function PassengerApp() {
-  const { user, signIn } = useFirebase();
+  const { user } = useFirebase();
+  const navigate = useNavigate();
   const [tripType, setTripType] = useState('experience');
   const [silentMode, setSilentMode] = useState(false);
   const [temperature, setTemperature] = useState([22]);
@@ -34,7 +36,7 @@ export default function PassengerApp() {
   const [pois, setPois] = useState<any[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
   const [selectedPois, setSelectedPois] = useState<string[]>([]);
-  const [globalSettings, setGlobalSettings] = useState({ normal_price_per_km: 1.5, base_fare: 5.0 });
+  const [globalSettings, setGlobalSettings] = useState({ normal_price_per_km: 1.5, base_fare: 5.0, price_per_min: 0.5, min_fare: 15.0 });
   const [rideHistory, setRideHistory] = useState<any[]>([]);
   
   // Chat States
@@ -48,11 +50,15 @@ export default function PassengerApp() {
 
   const [pickup, setPickup] = useState('Four Seasons Hotel Ritz, Lisbon');
   const [dropoff, setDropoff] = useState('The Yeatman, Porto');
+  const [pickupCoords, setPickupCoords] = useState<{lat: number, lon: number} | null>(null);
+  const [dropoffCoords, setDropoffCoords] = useState<{lat: number, lon: number} | null>(null);
+  const [distance, setDistance] = useState<number | null>(null);
+  const [duration, setDuration] = useState<number | null>(null);
   const [poiSearch, setPoiSearch] = useState('');
   const [isRefreshingPois, setIsRefreshingPois] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
-  const [pickupSuggestions, setPickupSuggestions] = useState<string[]>([]);
-  const [dropoffSuggestions, setDropoffSuggestions] = useState<string[]>([]);
+  const [pickupSuggestions, setPickupSuggestions] = useState<any[]>([]);
+  const [dropoffSuggestions, setDropoffSuggestions] = useState<any[]>([]);
   const addNotification = (message: string, type: 'success' | 'warning' | 'info' | 'error' = 'info') => {
     const id = Date.now().toString();
     setNotifications(prev => [{ id, message, type }, ...prev]);
@@ -90,8 +96,11 @@ export default function PassengerApp() {
     name: vt.name === 'Business' ? 'Mercedes S-Class' : vt.name === 'SUV' ? 'Range Rover' : 'Mercedes V-Class',
     type: vt.name,
     capacity: vt.capacity || '3 Pax • 2 Bags',
-    basePrice: vt.base_price,
+    basePrice: vt.basePrice,
     multiplier: vt.multiplier,
+    pricePerKm: vt.pricePerKm,
+    pricePerMin: vt.pricePerMin,
+    minFare: vt.minFare,
     rating: 4.8 + (Math.random() * 0.2),
     image: MOCK_IMAGES[i % MOCK_IMAGES.length],
     driver: MOCK_DRIVERS[i % MOCK_DRIVERS.length]
@@ -252,11 +261,98 @@ export default function PassengerApp() {
     }, 2000);
   };
 
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371; // km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+
+  const calculateRoute = async (pCoords: {lat: number, lon: number}, dCoords: {lat: number, lon: number}) => {
+    setIsGeocoding(true);
+    console.log('Calculating route from', pCoords, 'to', dCoords);
+    try {
+      const res = await fetch(`/api/maps/distance?origins=${pCoords.lat},${pCoords.lon}&destinations=${dCoords.lat},${dCoords.lon}`);
+      const data = await res.json();
+      console.log('Google Distance Matrix response:', data);
+      
+      if (data.rows && data.rows[0] && data.rows[0].elements && data.rows[0].elements[0]) {
+        const element = data.rows[0].elements[0];
+        if (element.status === 'OK') {
+          const distKm = element.distance.value / 1000;
+          const durMin = element.duration.value / 60;
+          console.log('Route calculated (Google):', distKm, 'km,', durMin, 'mins');
+          setDistance(distKm);
+          setDuration(durMin);
+          setIsGeocoding(false);
+          return { distance: distKm, duration: durMin };
+        } else {
+          console.warn('Google Distance Matrix element status:', element.status);
+        }
+      }
+      
+      console.log('Falling back to OSRM...');
+      // Fallback to OSRM
+      const osrmRes = await fetch(`https://router.project-osrm.org/route/v1/driving/${pCoords.lon},${pCoords.lat};${dCoords.lon},${dCoords.lat}?overview=false`, {
+        headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
+      });
+      const osrmData = await osrmRes.json();
+      console.log('OSRM response:', osrmData);
+      if (osrmData.routes && osrmData.routes[0]) {
+        const route = osrmData.routes[0];
+        const distKm = route.distance / 1000;
+        const durMin = route.duration / 60;
+        console.log('Route calculated (OSRM):', distKm, 'km,', durMin, 'mins');
+        setDistance(distKm);
+        setDuration(durMin);
+        setIsGeocoding(false);
+        return { distance: distKm, duration: durMin };
+      }
+    } catch (err) {
+      console.error('Error fetching route:', err);
+      // Fallback to Haversine
+      const dist = calculateDistance(pCoords.lat, pCoords.lon, dCoords.lat, dCoords.lon);
+      const dur = dist * 2 + 5;
+      console.log('Route calculated (Haversine):', dist, 'km,', dur, 'mins');
+      setDistance(dist);
+      setDuration(dur);
+      setIsGeocoding(false);
+      return { distance: dist, duration: dur };
+    }
+    console.warn('Route calculation failed all methods');
+    setIsGeocoding(false);
+    return null;
+  };
+
+  useEffect(() => {
+    if (pickupCoords && dropoffCoords) {
+      calculateRoute(pickupCoords, dropoffCoords);
+    }
+  }, [pickupCoords, dropoffCoords]);
+
   const selectedVehicle = vehiclesToDisplay[selectedVehicleIdx];
   
   // Dynamic Price Calculation
-  const estimatedDistance = 50; 
-  const baseRidePrice = (selectedVehicle?.basePrice || globalSettings.base_fare) + (estimatedDistance * globalSettings.normal_price_per_km);
+  const estimatedDistance = distance || 0; 
+  const estimatedTime = duration || 0; // minutes
+  
+  const calculateBaseFare = () => {
+    const base = Number(selectedVehicle?.basePrice) || 0;
+    const kmPrice = (Number(selectedVehicle?.pricePerKm) || globalSettings.normal_price_per_km) * estimatedDistance;
+    const minPrice = (Number(selectedVehicle?.pricePerMin) || globalSettings.price_per_min) * estimatedTime;
+    
+    let total = (base + kmPrice + minPrice) * (Number(selectedVehicle?.multiplier) || 1);
+    const minFare = Number(selectedVehicle?.minFare) || globalSettings.min_fare;
+    
+    return Math.max(total, minFare);
+  };
+
+  const baseRidePrice = calculateBaseFare();
   
   const poiCost = selectedPois.reduce((sum, id) => {
     const poi = pois.find(p => p.id === id);
@@ -264,8 +360,7 @@ export default function PassengerApp() {
     return sum + price;
   }, 0);
 
-  const vehicleMultiplier = selectedVehicle?.multiplier || 1.0;
-  const totalPrice = Math.round((baseRidePrice + poiCost) * vehicleMultiplier);
+  const totalPrice = Math.round((baseRidePrice + poiCost) * 1.23); // Add 23% IVA
 
   const handleNextVehicle = () => {
     setSelectedVehicleIdx((prev) => (prev + 1) % vehiclesToDisplay.length);
@@ -277,12 +372,107 @@ export default function PassengerApp() {
 
   const handleConfirmBooking = async () => {
     if (!user) {
-      signIn();
+      navigate('/login');
       return;
     }
 
     setBookingStatus('booking');
+    setIsGeocoding(true);
+    
     try {
+      // Geocode pickup if missing
+      let currentPickupCoords = pickupCoords;
+      if (!currentPickupCoords) {
+        if (ADDRESS_COORDS[pickup]) {
+          currentPickupCoords = ADDRESS_COORDS[pickup];
+          setPickupCoords(currentPickupCoords);
+        } else {
+          const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(pickup)}`);
+          const data = await res.json();
+          if (data.results && data.results[0]) {
+            currentPickupCoords = { 
+              lat: data.results[0].geometry.location.lat, 
+              lon: data.results[0].geometry.location.lng 
+            };
+            setPickupCoords(currentPickupCoords);
+          } else {
+            // Fallback to Nominatim
+            const nomRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(pickup)}&limit=1`, {
+              headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
+            });
+            const nomData = await nomRes.json();
+            if (nomData && nomData[0]) {
+              currentPickupCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
+              setPickupCoords(currentPickupCoords);
+            }
+          }
+        }
+      }
+
+      // Geocode dropoff if missing
+      let currentDropoffCoords = dropoffCoords;
+      if (!currentDropoffCoords) {
+        if (ADDRESS_COORDS[dropoff]) {
+          currentDropoffCoords = ADDRESS_COORDS[dropoff];
+          setDropoffCoords(currentDropoffCoords);
+        } else {
+          const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(dropoff)}`);
+          const data = await res.json();
+          if (data.results && data.results[0]) {
+            currentDropoffCoords = { 
+              lat: data.results[0].geometry.location.lat, 
+              lon: data.results[0].geometry.location.lng 
+            };
+            setDropoffCoords(currentDropoffCoords);
+          } else {
+            // Fallback to Nominatim
+            const nomRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dropoff)}&limit=1`, {
+              headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
+            });
+            const nomData = await nomRes.json();
+            if (nomData && nomData[0]) {
+              currentDropoffCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
+              setDropoffCoords(currentDropoffCoords);
+            }
+          }
+        }
+      }
+
+      if (!currentPickupCoords || !currentDropoffCoords) {
+        throw new Error('Could not find coordinates for the selected addresses. Please try a more specific address or select from the suggestions.');
+      }
+
+      setIsGeocoding(false);
+
+      // Recalculate distance and duration using OSRM
+      let finalDistance = distance;
+      let finalDuration = duration;
+      
+      const routeData = await calculateRoute(currentPickupCoords, currentDropoffCoords);
+      if (routeData) {
+        finalDistance = routeData.distance;
+        finalDuration = routeData.duration;
+      }
+
+      if (!finalDistance || !finalDuration) {
+        throw new Error('Could not calculate distance and time for the selected route.');
+      }
+
+      // Recalculate price with final distance/duration
+      const calculateFinalBaseFare = () => {
+        const base = Number(selectedVehicle?.basePrice) || 0;
+        const kmPrice = (Number(selectedVehicle?.pricePerKm) || globalSettings.normal_price_per_km) * finalDistance;
+        const minPrice = (Number(selectedVehicle?.pricePerMin) || globalSettings.price_per_min) * finalDuration;
+        
+        let total = (base + kmPrice + minPrice) * (Number(selectedVehicle?.multiplier) || 1);
+        const minFare = Number(selectedVehicle?.minFare) || globalSettings.min_fare;
+        
+        return Math.max(total, minFare);
+      };
+
+      const finalBaseRidePrice = calculateFinalBaseFare();
+      const finalTotalPrice = Math.round((finalBaseRidePrice + poiCost) * 1.23);
+
       await fetch('/api/rides', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -293,7 +483,7 @@ export default function PassengerApp() {
           dropoffLocation: dropoff,
           rideType: selectedVehicle.type,
           vehicleName: selectedVehicle.name,
-          price: totalPrice,
+          price: finalTotalPrice,
           preferences: {
             silentMode,
             temperature: temperature[0],
@@ -311,29 +501,91 @@ export default function PassengerApp() {
     }
   };
 
+  const [isGeocoding, setIsGeocoding] = useState(false);
+
+  const ADDRESS_COORDS: Record<string, {lat: number, lon: number}> = {
+    'Rua Ilha de Santa Maria 4, 2840-426, Seixal': { lat: 38.627, lon: -9.102 },
+    'Rua Ilha de Santa Maria, Seixal': { lat: 38.627, lon: -9.102 },
+    'Colombo Shopping Centre, Lisbon': { lat: 38.755, lon: -9.189 },
+    'Vasco da Gama Shopping, Lisbon': { lat: 38.767, lon: -9.097 },
+    'Amoreiras Shopping Center, Lisbon': { lat: 38.723, lon: -9.162 },
+    'CascaiShopping, Cascais': { lat: 38.721, lon: -9.398 },
+    'NorteShopping, Porto': { lat: 41.180, lon: -8.654 },
+    'Arrábida Shopping, Vila Nova de Gaia': { lat: 41.140, lon: -8.638 },
+    '2840-426, Seixal': { lat: 38.627, lon: -9.102 },
+    'Lisbon Airport (LIS), Lisbon': { lat: 38.774, lon: -9.134 },
+    'Lisbon Airport': { lat: 38.774, lon: -9.134 },
+    'Porto Airport (OPO), Porto': { lat: 41.242, lon: -8.678 },
+    'Four Seasons Hotel Ritz, Lisbon': { lat: 38.725, lon: -9.155 },
+    'The Yeatman, Porto': { lat: 41.133, lon: -8.613 },
+    'Sintra National Palace, Sintra': { lat: 38.797, lon: -9.390 },
+    'Cascais Marina, Cascais': { lat: 38.691, lon: -9.419 },
+    'Algarve Luxury Resort, Faro': { lat: 37.017, lon: -7.930 }
+  };
+
   const ADDRESS_SUGGESTIONS = [
     'Four Seasons Hotel Ritz, Lisbon', 'The Yeatman, Porto', 'Sintra National Palace, Sintra', 'Cascais Marina, Cascais', 'Algarve Luxury Resort, Faro', 'Lisbon Airport (LIS), Lisbon', 'Porto Airport (OPO), Porto', 'Avenida da Liberdade, Lisbon', 'Ribeira District, Porto', 'Torre de Belém, Lisbon', 'Benagil Cave, Algarve', 'University of Coimbra, Coimbra', 'Évora Roman Temple, Évora', 'Fatima Sanctuary, Fatima', 'Óbidos Medieval Village, Óbidos',
     'Eiffel Tower, Paris', 'Louvre Museum, Paris', 'Mont Saint-Michel, Normandy', 'Palace of Versailles, Versailles', 'Promenade des Anglais, Nice', 'Carcassonne Fortress, Carcassonne', 'Chamonix-Mont-Blanc, Alps', 'Verdon Gorge, Provence', 'Notre-Dame de Paris, Paris', 'Arc de Triomphe, Paris', 'Sacré-Cœur, Paris', 'Musée d\'Orsay, Paris',
-    'Sagrada Família, Barcelona', 'Alhambra, Granada', 'Prado Museum, Madrid', 'Seville Cathedral, Seville', 'Park Güell, Barcelona', 'Guggenheim Museum, Bilbao', 'Santiago de Compostela Cathedral, Galicia', 'Toledo Old City, Toledo'
+    'Sagrada Família, Barcelona', 'Alhambra, Granada', 'Prado Museum, Madrid', 'Seville Cathedral, Seville', 'Park Güell, Barcelona', 'Guggenheim Museum, Bilbao', 'Santiago de Compostela Cathedral, Galicia', 'Toledo Old City, Toledo',
+    'Rua Augusta, Lisbon', 'Chiado, Lisbon', 'Alfama, Lisbon', 'Bairro Alto, Lisbon', 'Belém, Lisbon', 'Parque das Nações, Lisbon', 'Cais do Sodré, Lisbon', 'Principe Real, Lisbon', 'Rua Garrett, Lisbon', 'Rua do Ouro, Lisbon', 'Rua da Prata, Lisbon', 'Avenida de Roma, Lisbon', 'Avenida Almirante Reis, Lisbon',
+    'Rua Ilha de Santa Maria 4, 2840-426, Seixal', 'Rua Ilha de Santa Maria, Seixal', 'Colombo Shopping Centre, Lisbon', 'Vasco da Gama Shopping, Lisbon', 'Amoreiras Shopping Center, Lisbon', 'CascaiShopping, Cascais', 'NorteShopping, Porto', 'Arrábida Shopping, Vila Nova de Gaia', '2840-426, Seixal', 'Lisbon Airport',
+    'Rua de Santa Catarina, Porto', 'Rua das Flores, Porto', 'Avenida dos Aliados, Porto', 'Foz do Douro, Porto', 'Vila Nova de Gaia, Porto', 'Matosinhos, Porto', 'Boavista, Porto', 'Campanhã, Porto', 'Cedofeita, Porto',
+    'Vilamoura, Algarve', 'Albufeira, Algarve', 'Lagos, Algarve', 'Tavira, Algarve', 'Portimão, Algarve', 'Sagres, Algarve', 'Quarteira, Algarve', 'Vale do Lobo, Algarve'
   ];
 
   const handlePickupChange = (val: string) => {
     setPickup(val);
-    if (val.length > 2) {
-      setPickupSuggestions(ADDRESS_SUGGESTIONS.filter(s => s.toLowerCase().includes(val.toLowerCase())));
-    } else {
-      setPickupSuggestions([]);
-    }
   };
 
   const handleDropoffChange = (val: string) => {
     setDropoff(val);
-    if (val.length > 2) {
-      setDropoffSuggestions(ADDRESS_SUGGESTIONS.filter(s => s.toLowerCase().includes(val.toLowerCase())));
-    } else {
-      setDropoffSuggestions([]);
-    }
   };
+
+  useEffect(() => {
+    const fetchPickup = async () => {
+      if (pickup.length > 2) {
+        try {
+          const res = await fetch(`/api/maps/autocomplete?input=${encodeURIComponent(pickup)}`);
+          const data = await res.json();
+          const suggestions = (data.predictions || []).map((p: any) => ({
+            display_name: p.description,
+            place_id: p.place_id,
+            isGoogle: true
+          }));
+          setPickupSuggestions(suggestions);
+        } catch (err) {
+          console.error('Error fetching suggestions:', err);
+        }
+      } else {
+        setPickupSuggestions([]);
+      }
+    };
+    const timeoutId = setTimeout(fetchPickup, 500);
+    return () => clearTimeout(timeoutId);
+  }, [pickup]);
+
+  useEffect(() => {
+    const fetchDropoff = async () => {
+      if (dropoff.length > 2) {
+        try {
+          const res = await fetch(`/api/maps/autocomplete?input=${encodeURIComponent(dropoff)}`);
+          const data = await res.json();
+          const suggestions = (data.predictions || []).map((p: any) => ({
+            display_name: p.description,
+            place_id: p.place_id,
+            isGoogle: true
+          }));
+          setDropoffSuggestions(suggestions);
+        } catch (err) {
+          console.error('Error fetching suggestions:', err);
+        }
+      } else {
+        setDropoffSuggestions([]);
+      }
+    };
+    const timeoutId = setTimeout(fetchDropoff, 500);
+    return () => clearTimeout(timeoutId);
+  }, [dropoff]);
 
   const BookingConfirmationModal = () => (
     <Dialog open={isBookingModalOpen} onOpenChange={setIsBookingModalOpen}>
@@ -432,9 +684,37 @@ export default function PassengerApp() {
             </div>
           </div>
 
-          <div className="bg-gray-50 p-4 rounded-xl flex justify-between items-center">
-            <span className="text-gray-500 font-medium">Total Amount</span>
-            <span className="text-2xl font-bold text-pex-blue">€{totalPrice}</span>
+          <div className="bg-gray-50 p-4 rounded-xl space-y-2">
+            <div className="flex justify-between items-center text-xs text-gray-500">
+              <span>Base Fare</span>
+              <span>€{(Number(selectedVehicle?.basePrice || 0) * (Number(selectedVehicle?.multiplier) || 1)).toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between items-center text-xs text-gray-500">
+              <span>Distance ({estimatedDistance.toFixed(1)} km)</span>
+              <span>€{(estimatedDistance * (Number(selectedVehicle?.pricePerKm) || globalSettings.normal_price_per_km) * (Number(selectedVehicle?.multiplier) || 1)).toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between items-center text-xs text-gray-500">
+              <span>Time ({estimatedTime.toFixed(0)} min)</span>
+              <span>€{(estimatedTime * (Number(selectedVehicle?.pricePerMin) || globalSettings.price_per_min) * (Number(selectedVehicle?.multiplier) || 1)).toFixed(2)}</span>
+            </div>
+            {poiCost > 0 && (
+              <div className="flex justify-between items-center text-xs text-gray-500">
+                <span>Experiences / POIs</span>
+                <span>€{poiCost.toFixed(2)}</span>
+              </div>
+            )}
+            <div className="flex justify-between items-center text-sm pt-2 border-t border-gray-100">
+              <span className="text-gray-500">Subtotal</span>
+              <span className="font-medium text-pex-blue">€{(Number(totalPrice) / 1.23).toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between items-center text-sm">
+              <span className="text-gray-500">IVA (23%)</span>
+              <span className="font-medium text-pex-blue">€{(Number(totalPrice) - (Number(totalPrice) / 1.23)).toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+              <span className="text-gray-700 font-bold">Total Amount</span>
+              <span className="text-2xl font-bold text-pex-blue">€{totalPrice}</span>
+            </div>
           </div>
         </div>
 
@@ -490,245 +770,252 @@ export default function PassengerApp() {
   }
 
   return (
-    <div className="flex-1 flex flex-col md:flex-row bg-gray-50 overflow-hidden">
-      <div className="w-full md:w-[450px] bg-white shadow-xl z-10 flex flex-col h-full overflow-y-auto border-r border-gray-200">
-        <div className="p-6 bg-pex-blue text-white">
-          <div className="flex justify-between items-center mb-4">
-            <h1 className="text-2xl font-light tracking-wide">Book a Ride</h1>
-            <Badge variant="outline" className="text-pex-gold border-pex-gold bg-pex-blue">
-              <Crown size={12} className="mr-1" /> PEX Priority
-            </Badge>
-          </div>
-          
-          <Tabs defaultValue="experience" className="w-full" onValueChange={setTripType}>
-            <TabsList className="grid w-full grid-cols-3 bg-white/10 text-white">
-              <TabsTrigger value="transfer" className="data-[state=active]:bg-pex-gold data-[state=active]:text-pex-blue">Quick Transfer</TabsTrigger>
-              <TabsTrigger value="experience" className="data-[state=active]:bg-pex-gold data-[state=active]:text-pex-blue">Experience</TabsTrigger>
-              <TabsTrigger value="history" className="data-[state=active]:bg-pex-gold data-[state=active]:text-pex-blue">History</TabsTrigger>
-            </TabsList>
-          </Tabs>
+    <div className="flex-1 flex flex-col bg-white overflow-x-hidden">
+      {/* Test comment */}
+      {/* Premium Hero Section */}
+      <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden bg-pex-blue">
+        <div className="absolute inset-0 z-0">
+          <motion.div 
+            initial={{ scale: 1.1, opacity: 0 }}
+            animate={{ scale: 1, opacity: 0.4 }}
+            transition={{ duration: 2 }}
+            className="w-full h-full"
+          >
+            <img 
+              src="https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&q=80&w=2000" 
+              alt="Luxury Car" 
+              className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+          </motion.div>
+          <div className="absolute inset-0 bg-gradient-to-r from-pex-blue via-pex-blue/60 to-transparent" />
         </div>
 
-        <div className="p-6 flex-1 flex flex-col gap-6">
-          {tripType === 'history' ? (
-            <div className="space-y-4">
-              <h3 className="font-semibold text-pex-blue uppercase tracking-wider text-sm">Your Journeys</h3>
-              <ScrollArea className="h-[calc(100vh-300px)] pr-4">
-                <div className="space-y-4">
-                  {rideHistory.length === 0 ? (
-                    <div className="text-center py-12 text-gray-400">
-                      <History size={48} className="mx-auto mb-2 opacity-20" />
-                      <p>No rides yet. Start your first journey!</p>
-                    </div>
-                  ) : (
-                    rideHistory.map((ride) => (
-                      <Card key={ride.id} className="border-gray-100 hover:border-pex-gold/30 transition-all">
-                        <CardContent className="p-4">
-                          <div className="flex justify-between items-start mb-3">
-                            <div>
-                              <Badge className={ride.status === 'completed' ? 'bg-green-100 text-green-800' : ride.status === 'cancelled' ? 'bg-red-100 text-red-800' : 'bg-pex-gold/10 text-pex-gold'}>
-                                {ride.status.toUpperCase()}
-                              </Badge>
-                              <p className="text-[10px] text-gray-400 mt-1">
-                                {new Date(ride.createdAt).toLocaleDateString()} • {new Date(ride.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </p>
-                            </div>
-                            <p className="font-bold text-pex-blue">€{ride.price}</p>
-                          </div>
-                          <div className="space-y-2 relative pl-4 border-l-2 border-dashed border-gray-100">
-                            <div className="relative">
-                              <div className="absolute -left-[21px] top-1 w-2 h-2 rounded-full bg-pex-blue" />
-                              <p className="text-xs font-medium text-gray-700 truncate">{ride.pickupLocation}</p>
-                            </div>
-                            <div className="relative">
-                              <div className="absolute -left-[21px] top-1 w-2 h-2 rounded-full bg-pex-gold" />
-                              <p className="text-xs font-medium text-gray-700 truncate">{ride.dropoffLocation}</p>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))
-                  )}
-                </div>
-              </ScrollArea>
-            </div>
-          ) : (
-            <>
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 relative">
-                  <div className="w-2 h-2 rounded-full bg-pex-blue" />
-                  <div className="flex-1 border-b border-gray-200 pb-2">
-                    <p className="text-sm text-gray-500 uppercase tracking-wider">Pickup</p>
-                    <Input value={pickup} onChange={(e) => handlePickupChange(e.target.value)} className="border-none p-0 h-auto font-medium focus-visible:ring-0 bg-transparent" />
-                    {pickupSuggestions.length > 0 && (
-                      <Card className="absolute top-full left-0 right-0 z-50 mt-1 shadow-xl border-gray-100">
-                        <ScrollArea className="h-48">
-                          {pickupSuggestions.map(s => (
-                            <div key={s} className="p-3 hover:bg-gray-50 cursor-pointer text-sm border-b last:border-0" onClick={() => { setPickup(s); setPickupSuggestions([]); }}>{s}</div>
-                          ))}
-                        </ScrollArea>
-                      </Card>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 relative">
-                  <div className="w-2 h-2 rounded-full bg-pex-gold" />
-                  <div className="flex-1 border-b border-gray-200 pb-2">
-                    <p className="text-sm text-gray-500 uppercase tracking-wider">Dropoff</p>
-                    <Input value={dropoff} onChange={(e) => handleDropoffChange(e.target.value)} className="border-none p-0 h-auto font-medium focus-visible:ring-0 bg-transparent" />
-                    {dropoffSuggestions.length > 0 && (
-                      <Card className="absolute top-full left-0 right-0 z-50 mt-1 shadow-xl border-gray-100">
-                        <ScrollArea className="h-48">
-                          {dropoffSuggestions.map(s => (
-                            <div key={s} className="p-3 hover:bg-gray-50 cursor-pointer text-sm border-b last:border-0" onClick={() => { setDropoff(s); setDropoffSuggestions([]); }}>{s}</div>
-                          ))}
-                        </ScrollArea>
-                      </Card>
-                    )}
-                  </div>
-                </div>
+        <div className="relative z-10 max-w-7xl mx-auto px-6 w-full grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+          <div className="space-y-8">
+            <motion.div
+              initial={{ opacity: 0, x: -50 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.8 }}
+            >
+              <Badge className="bg-pex-gold/20 text-pex-gold border-pex-gold/30 px-4 py-1 mb-6 uppercase tracking-[0.2em] text-[10px] font-bold">
+                Elite Chauffeur Service
+              </Badge>
+              <h1 className="text-6xl md:text-8xl font-light text-white leading-[0.9] tracking-tight mb-6">
+                Quiet <span className="italic font-serif text-pex-gold">Luxury</span>,<br />
+                Pure Comfort.
+              </h1>
+              <p className="text-xl text-white/60 font-light max-w-lg leading-relaxed">
+                Experience the pinnacle of private transportation. Our elite chauffeur service provides safety, and punctuality across Portugal's most exclusive destinations.
+              </p>
+            </motion.div>
+
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4, duration: 0.8 }}
+              className="flex flex-wrap gap-4"
+            >
+              <Button 
+                size="lg" 
+                className="bg-pex-gold text-pex-blue hover:bg-white font-bold px-8 h-14 text-base rounded-full"
+                onClick={() => navigate('/book')}
+              >
+                Book Your Journey
+                <ArrowRight className="ml-2" size={18} />
+              </Button>
+              <Button 
+                variant="outline" 
+                size="lg" 
+                className="border-white/20 text-white hover:bg-white/10 px-8 h-14 text-base rounded-full"
+                onClick={() => document.getElementById('features-section')?.scrollIntoView({ behavior: 'smooth' })}
+              >
+                Explore Services
+              </Button>
+            </motion.div>
+
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.8 }}
+              className="grid grid-cols-3 gap-8 pt-12 border-t border-white/10 max-w-md"
+            >
+              <div>
+                <p className="text-2xl font-bold text-white">100%</p>
+                <p className="text-[10px] uppercase tracking-widest text-white/40 font-bold">Punctuality</p>
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-white">5.0</p>
+                <p className="text-[10px] uppercase tracking-widest text-white/40 font-bold">Avg Rating</p>
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-white">24/7</p>
+                <p className="text-[10px] uppercase tracking-widest text-white/40 font-bold">Concierge</p>
+              </div>
+            </motion.div>
+          </div>
+        </div>
+      </section>
+
+      {user && (
+        <>
+          {/* Features Section */}
+          <section id="features-section" className="py-24 bg-white">
+            <div className="max-w-7xl mx-auto px-6">
+              <div className="text-center max-w-3xl mx-auto mb-20">
+                <h2 className="text-4xl font-light text-pex-blue mb-6">Uncompromising Standards</h2>
+                <p className="text-gray-500 leading-relaxed">We redefine the art of travel through meticulous attention to detail and a commitment to excellence that goes beyond transportation.</p>
               </div>
 
-              {tripType === 'experience' && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-semibold text-pex-blue uppercase tracking-wider text-sm">Curated Side Trips</h3>
-                    <Button variant="ghost" size="icon" className={`h-8 w-8 rounded-full ${isRefreshingPois ? 'animate-spin' : ''}`} onClick={fetchPois} disabled={isRefreshingPois}><RefreshCw size={14} /></Button>
-                  </div>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
-                    <Input placeholder="Filter side trips..." className="pl-9 h-9 text-xs bg-gray-50 border-none focus-visible:ring-pex-gold" value={poiSearch} onChange={(e) => setPoiSearch(e.target.value)} />
-                  </div>
-                  <div className="grid gap-3">
-                    {pois.filter(p => p.name.toLowerCase().includes(poiSearch.toLowerCase())).map((poi) => (
-                      <Card key={poi.id} className={`cursor-pointer transition-all ${selectedPois.includes(poi.id) ? 'border-pex-gold bg-pex-gold/5 shadow-sm' : 'hover:bg-gray-50'}`} onClick={() => togglePoi(poi.id)}>
-                        <CardContent className="p-4 flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-full ${selectedPois.includes(poi.id) ? 'bg-pex-gold/20' : 'bg-gray-100'}`}><MapPin size={18} className={selectedPois.includes(poi.id) ? 'text-pex-gold' : 'text-gray-500'} /></div>
-                            <div>
-                              <p className={`font-medium ${selectedPois.includes(poi.id) ? 'text-pex-blue' : 'text-gray-700'}`}>{poi.name}</p>
-                              <p className="text-[10px] text-gray-500">{poi.duration} • Experience</p>
-                            </div>
-                          </div>
-                          <div className="flex flex-col items-end gap-1">
-                            <div className="flex items-center gap-2"><span className="text-[10px] text-gray-400">Normal:</span><span className="text-xs font-bold text-pex-blue">€{poi.price}</span></div>
-                            <div className="flex items-center gap-2"><span className="text-[10px] text-gray-400">Tour:</span><span className="text-xs font-bold text-pex-gold">€{poi.tour_price}</span></div>
-                            {selectedPois.includes(poi.id) && <CheckCircle2 size={16} className="text-pex-gold mt-1" />}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-
-              <div className="space-y-4 relative">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-pex-blue uppercase tracking-wider text-sm">Select Vehicle</h3>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="icon" className="h-8 w-8 rounded-full" onClick={handlePrevVehicle}><ChevronLeft size={16} /></Button>
-                    <Button variant="outline" size="icon" className="h-8 w-8 rounded-full" onClick={handleNextVehicle}><ChevronRight size={16} /></Button>
-                  </div>
-                </div>
-                <div className="relative overflow-hidden rounded-xl pb-2">
-                  <motion.div className="flex" animate={{ x: `-${selectedVehicleIdx * 100}%` }} transition={{ type: 'spring', stiffness: 300, damping: 30 }}>
-                    {vehiclesToDisplay.map((vehicle, idx) => (
-                      <div key={vehicle.id} className="min-w-full px-1">
-                        <Card className={`border-2 cursor-pointer transition-all duration-300 relative overflow-hidden ${selectedVehicleIdx === idx ? 'border-pex-blue shadow-md scale-100' : 'border-transparent opacity-70 scale-95 hover:opacity-100'}`} onClick={() => setSelectedVehicleIdx(idx)}>
-                          <div className={`absolute top-0 right-0 text-white text-xs px-3 py-1 rounded-bl-lg z-10 ${selectedVehicleIdx === idx ? 'bg-pex-blue' : 'bg-gray-800'}`}>{vehicle.type}</div>
-                          <CardContent className="p-4">
-                            <div className="h-32 bg-gray-100 rounded-md mb-3 flex items-center justify-center overflow-hidden relative">
-                              <img src={vehicle.image} alt={vehicle.name} className="object-cover w-full h-full" referrerPolicy="no-referrer" />
-                            </div>
-                            <h4 className="font-bold text-lg">{vehicle.name}</h4>
-                            <p className="text-sm text-gray-500 mb-3">{vehicle.capacity}</p>
-                            <div className="flex items-center justify-between">
-                              <span className="font-bold text-xl">€{Math.round((baseRidePrice + poiCost) * vehicle.multiplier)}</span>
-                              <div className="flex items-center gap-1 text-xs text-gray-500"><Star size={12} className="fill-pex-gold text-pex-gold" /><span>{vehicle.rating.toFixed(1)} (Vehicle)</span></div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      </div>
-                    ))}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
+                {[
+                  { icon: Shield, title: 'Safety First', desc: 'Our chauffeurs undergo rigorous background checks and advanced driving training.' },
+                  { icon: Globe, title: 'Global Reach', desc: 'Seamless coordination across major European cities with local expertise.' },
+                  { icon: Award, title: 'Premium Fleet', desc: 'Only the latest models of Mercedes-Benz and Range Rover, maintained to perfection.' }
+                ].map((feature, i) => (
+                  <motion.div 
+                    key={i}
+                    whileHover={{ y: -10 }}
+                    className="p-8 rounded-3xl bg-gray-50 border border-gray-100 space-y-4"
+                  >
+                    <div className="w-14 h-14 bg-pex-gold/10 rounded-2xl flex items-center justify-center">
+                      <feature.icon className="text-pex-gold" size={28} />
+                    </div>
+                    <h3 className="text-xl font-bold text-pex-blue">{feature.title}</h3>
+                    <p className="text-gray-500 leading-relaxed text-sm">{feature.desc}</p>
                   </motion.div>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          {/* Premium Fleet Gallery */}
+          <section className="py-24 bg-gray-50 overflow-hidden">
+            <div className="max-w-7xl mx-auto px-6">
+              <div className="flex flex-col md:flex-row justify-between items-end mb-16 gap-8">
+                <div className="max-w-2xl">
+                  <Badge className="bg-pex-gold/10 text-pex-gold border-none mb-4">The Collection</Badge>
+                  <h2 className="text-4xl md:text-5xl font-light text-pex-blue">A Fleet Beyond <span className="italic font-serif">Comparison</span></h2>
                 </div>
-                {selectedVehicle && (
-                  <AnimatePresence mode="wait">
-                    <motion.div key={selectedVehicle.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }} className="bg-white border border-gray-100 p-4 rounded-xl shadow-sm flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-full overflow-hidden bg-gray-200 border-2 border-pex-gold">
-                        <img src={selectedVehicle.driver.photo} alt={selectedVehicle.driver.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                      </div>
-                      <div className="flex-1">
-                        <h4 className="font-semibold text-pex-blue">{selectedVehicle.driver.name}</h4>
-                        <div className="flex items-center gap-2 text-xs text-gray-500"><span className="flex items-center gap-1"><Star size={12} className="fill-pex-gold text-pex-gold" /> {selectedVehicle.driver.rating}</span><span>•</span><span>{selectedVehicle.driver.trips} trips</span></div>
-                      </div>
-                      <Badge variant="secondary" className="bg-pex-gold/10 text-pex-gold">Chauffeur</Badge>
-                    </motion.div>
-                  </AnimatePresence>
-                )}
+                <p className="text-gray-500 max-w-sm text-right hidden md:block">Every vehicle in our collection is selected for its uncompromising comfort and technological sophistication.</p>
               </div>
 
-              <div className="space-y-4 bg-gray-50 p-4 rounded-xl border border-gray-100">
-                <h3 className="font-semibold text-pex-blue uppercase tracking-wider text-sm flex items-center gap-2"><Crown size={16} className="text-pex-gold" />In-Car Preferences</h3>
-                <div className="space-y-5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3"><VolumeX size={18} className="text-gray-500" /><Label htmlFor="silent-mode" className="text-sm font-medium">Silent Mode</Label></div>
-                    <Switch id="silent-mode" checked={silentMode} onCheckedChange={setSilentMode} />
-                  </div>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between"><div className="flex items-center gap-3"><Thermometer size={18} className="text-gray-500" /><Label className="text-sm font-medium">Temperature</Label></div><span className="text-sm font-bold text-pex-blue">{temperature}°C</span></div>
-                    <Slider defaultValue={[22]} max={28} min={18} step={1} value={temperature} onValueChange={setTemperature} className="w-full" />
-                  </div>
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3"><Music size={18} className="text-gray-500" /><span className="text-sm font-medium">In-Car Playlist</span></div>
-                    <div className="grid grid-cols-2 gap-2">
-                      {['Lounge & Jazz', 'Classical', 'Modern Pop', 'Deep House'].map((p) => (
-                        <Button key={p} variant="outline" size="sm" className={`text-[10px] h-8 ${selectedPlaylist === p ? 'border-pex-gold bg-pex-gold/5 text-pex-blue' : 'text-gray-500'}`} onClick={() => setSelectedPlaylist(p)}>{p}</Button>
-                      ))}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  { name: 'Mercedes S-Class', type: 'Business Elite', img: 'https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&q=80&w=800' },
+                  { name: 'Range Rover Vogue', type: 'Luxury SUV', img: 'https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?auto=format&fit=crop&q=80&w=800' },
+                  { name: 'Mercedes V-Class', type: 'Executive Van', img: 'https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?auto=format&fit=crop&q=80&w=800' },
+                  { name: 'Bentley Flying Spur', type: 'Ultra Luxury', img: 'https://images.unsplash.com/photo-1580273916550-e323be2ae537?auto=format&fit=crop&q=80&w=800' }
+                ].map((car, i) => (
+                  <motion.div 
+                    key={i}
+                    whileHover={{ scale: 1.02 }}
+                    className="group relative aspect-[4/5] overflow-hidden rounded-3xl bg-pex-blue"
+                  >
+                    <img 
+                      src={car.img} 
+                      alt={car.name} 
+                      className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-700"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-pex-blue via-transparent to-transparent opacity-60" />
+                    <div className="absolute bottom-0 left-0 p-8 w-full">
+                      <p className="text-pex-gold text-[10px] uppercase tracking-widest font-bold mb-2">{car.type}</p>
+                      <h3 className="text-white text-xl font-light">{car.name}</h3>
                     </div>
+                  </motion.div>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          {/* Concierge Section */}
+          <section className="py-24 bg-pex-blue relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-1/2 h-full opacity-10 pointer-events-none">
+              <svg viewBox="0 0 100 100" className="w-full h-full">
+                <path d="M0,50 Q25,0 50,50 T100,50" fill="none" stroke="white" strokeWidth="0.1" />
+                <path d="M0,60 Q25,10 50,60 T100,60" fill="none" stroke="white" strokeWidth="0.1" />
+              </svg>
+            </div>
+            
+            <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 lg:grid-cols-2 gap-24 items-center">
+              <div className="space-y-8">
+                <Badge className="bg-white/10 text-white border-white/20">Personalized Service</Badge>
+                <h2 className="text-4xl md:text-6xl font-light text-white leading-tight">Your Personal <span className="italic font-serif text-pex-gold">Concierge</span> on Wheels</h2>
+                <p className="text-white/60 text-lg leading-relaxed">
+                  Our service extends far beyond the drive. From restaurant reservations to event access, our chauffeurs act as your local experts, ensuring every detail of your stay is perfect.
+                </p>
+                <div className="space-y-4">
+                  {[
+                    'Multi-lingual professional chauffeurs',
+                    'Real-time flight and traffic monitoring',
+                    'Customized in-car amenities',
+                    'Seamless corporate account management'
+                  ].map((item, i) => (
+                    <div key={i} className="flex items-center gap-3 text-white/80">
+                      <CheckCircle2 className="text-pex-gold" size={20} />
+                      <span>{item}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="relative">
+                <div className="aspect-square rounded-full border border-white/10 p-12 flex items-center justify-center">
+                  <div className="aspect-square rounded-full border border-white/20 p-12 flex items-center justify-center">
+                    <motion.div 
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+                      className="w-full h-full rounded-full border-t-2 border-pex-gold"
+                    />
+                  </div>
+                </div>
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="text-center">
+                    <p className="text-5xl font-light text-white mb-2">24/7</p>
+                    <p className="text-pex-gold text-xs uppercase tracking-[0.3em] font-bold">Availability</p>
                   </div>
                 </div>
               </div>
+            </div>
+          </section>
 
-              {showSummary ? (
-                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-4 pt-4 border-t border-gray-100">
-                  <div className="flex justify-between text-sm"><span className="text-gray-500">Vehicle</span><span className="font-medium">{selectedVehicle?.name} ({selectedVehicle?.type})</span></div>
-                  <div className="flex justify-between text-sm"><span className="text-gray-500">Chauffeur</span><span className="font-medium">{selectedVehicle?.driver.name}</span></div>
-                  <div className="flex justify-between text-sm font-bold pt-2 border-t"><span>Total</span><span className="text-pex-blue">€{totalPrice}</span></div>
-                  <div className="flex gap-2 pt-4">
-                    <Button variant="outline" className="flex-1" onClick={() => setShowSummary(false)} disabled={bookingStatus === 'booking'}>Back</Button>
-                    <div className="flex-1 flex flex-col gap-2">
-                      <Button className="w-full bg-pex-blue hover:bg-pex-blue/90 text-white" onClick={() => setIsBookingModalOpen(true)} disabled={bookingStatus === 'booking'}>{bookingStatus === 'booking' ? 'Processing...' : 'Confirm & Pay'}</Button>
-                      <Button variant="outline" className="w-full border-pex-gold text-pex-blue hover:bg-pex-gold/10 flex items-center justify-center gap-2" onClick={() => setIsBookingModalOpen(true)}><CreditCard size={16} className="text-pex-gold" />Pay with Viva.com</Button>
-                    </div>
+          {/* Testimonials */}
+          <section className="py-24 bg-white">
+            <div className="max-w-7xl mx-auto px-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-16 items-center">
+                <div className="space-y-6">
+                  <h2 className="text-4xl font-light text-pex-blue">What Our <span className="italic font-serif">Elite</span> Clients Say</h2>
+                  <div className="space-y-8">
+                    {[
+                      { name: 'Alexander V.', role: 'CEO, Tech Ventures', text: 'The level of professionalism and attention to detail is unmatched. Passageiro Express is my only choice in Portugal.' },
+                      { name: 'Elena R.', role: 'Fashion Consultant', text: 'Impeccable service. The chauffeurs are discreet, knowledgeable, and the cars are always in pristine condition.' }
+                    ].map((t, i) => (
+                      <div key={i} className="space-y-4">
+                        <p className="text-xl text-gray-600 italic font-serif">"{t.text}"</p>
+                        <div>
+                          <p className="font-bold text-pex-blue">{t.name}</p>
+                          <p className="text-xs text-gray-400 uppercase tracking-widest">{t.role}</p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                </motion.div>
-              ) : (
-                <>
-                  <div className="flex justify-between items-center mb-4"><span className="text-gray-500">Total (Fixed Price)</span><span className="text-2xl font-bold text-pex-blue">€{totalPrice}</span></div>
-                  <Button className="w-full bg-pex-blue hover:bg-pex-blue/90 text-white h-12 text-lg" onClick={() => { if (!user) { signIn(); } else { setShowSummary(true); } }}>{user ? 'Review Booking' : 'Login to Book'}</Button>
-                </>
-              )}
-            </>
-          )}
-        </div>
-      </div>
+                </div>
+                <div className="relative aspect-video rounded-3xl overflow-hidden shadow-2xl">
+                  <img 
+                    src="https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&q=80&w=1200" 
+                    alt="Luxury Event" 
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute inset-0 bg-pex-blue/20" />
+                </div>
+              </div>
+            </div>
+          </section>
+        </>
+      )}
 
-      <BookingConfirmationModal />
-
-      <div className="hidden md:flex flex-1 relative bg-gray-200 items-center justify-center overflow-hidden">
-        <div className="absolute inset-0 opacity-40" style={{ backgroundImage: 'url("https://images.unsplash.com/photo-1524661135-423995f22d0b?auto=format&fit=crop&q=80&w=2000&h=2000")', backgroundSize: 'cover', backgroundPosition: 'center' }} />
-        <div className="relative z-10 text-center space-y-4 p-12 bg-white/80 backdrop-blur-md rounded-3xl shadow-2xl border border-white max-w-lg">
-          <div className="w-20 h-20 bg-pex-blue rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg"><Navigation size={40} className="text-pex-gold animate-pulse" /></div>
-          <h2 className="text-4xl font-light text-pex-blue tracking-tight">Premium Experience</h2>
-          <p className="text-gray-600 leading-relaxed">Your exclusive chauffeur service across Portugal, Spain, and France. Luxury, comfort, and safety in every mile.</p>
-          <div className="grid grid-cols-3 gap-4 pt-6">
-            <div className="space-y-1"><p className="text-2xl font-bold text-pex-blue">500+</p><p className="text-[10px] uppercase tracking-widest text-gray-400 font-bold">Vehicles</p></div>
-            <div className="space-y-1"><p className="text-2xl font-bold text-pex-blue">1.2k</p><p className="text-[10px] uppercase tracking-widest text-gray-400 font-bold">Chauffeurs</p></div>
-            <div className="space-y-1"><p className="text-2xl font-bold text-pex-blue">50k+</p><p className="text-[10px] uppercase tracking-widest text-gray-400 font-bold">Rides</p></div>
-          </div>
-        </div>
-      </div>
+      {/* Booking section removed */}
 
       {/* Chat Widget */}
       <div className="fixed bottom-6 right-6 z-50">
@@ -736,7 +1023,7 @@ export default function PassengerApp() {
           {isChatOpen && (
             <motion.div initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.95 }} className="absolute bottom-16 right-0 w-80 h-96 bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden">
               <div className="p-4 bg-pex-blue text-white flex justify-between items-center">
-                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" /><span className="font-medium">PEX Support</span></div>
+                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" /><span className="font-medium">Support</span></div>
                 <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/10" onClick={() => setIsChatOpen(false)}><X size={18} /></Button>
               </div>
               <ScrollArea className="flex-1 p-4" ref={scrollRef}>

@@ -26,13 +26,14 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Bell, Send, Car, UserPlus, X, VolumeX, Thermometer, History, LayoutDashboard, Navigation, ChevronRight, RefreshCw, Settings, CreditCard, MapPin, User } from 'lucide-react';
+import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Shield, Bell, Send, Car, UserPlus, X, VolumeX, Thermometer, History, LayoutDashboard, Navigation, ChevronRight, RefreshCw, Settings, CreditCard, MapPin, User } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useFirebase } from '../FirebaseProvider';
 import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, limit, addDoc, serverTimestamp, setDoc, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { motion, AnimatePresence } from 'motion/react';
 import { socket } from '../lib/socket';
+import { useNavigate } from 'react-router-dom';
 
 const revenueData = [
   { name: 'Mon', revenue: 4000 },
@@ -100,7 +101,12 @@ interface UserProfile {
 }
 
 export default function AdminDashboard() {
-  const { profile, user: currentUser } = useFirebase();
+  const { profile, user: currentUser, loading: authLoading, logout } = useFirebase();
+  const navigate = useNavigate();
+  const [adminAuthenticated, setAdminAuthenticated] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [loginError, setLoginError] = useState('');
   const [activeTab, setActiveTab] = useState('live-map');
   const [rides, setRides] = useState<Ride[]>([]);
   const [driverLocations, setDriverLocations] = useState<DriverLocation[]>([]);
@@ -124,7 +130,7 @@ export default function AdminDashboard() {
   // Vehicle Type States
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
   const [isAddingVehicleType, setIsAddingVehicleType] = useState(false);
-  const [newVehicleType, setNewVehicleType] = useState({ name: '', basePrice: 0, multiplier: 1.0, capacity: 4, description: '' });
+  const [newVehicleType, setNewVehicleType] = useState({ name: '', basePrice: 0, multiplier: 1.0, pricePerKm: 0, pricePerMin: 0, minFare: 0, capacity: 4, description: '' });
   const [editingVehicleType, setEditingVehicleType] = useState<any>(null);
 
   // POI Management States
@@ -135,7 +141,7 @@ export default function AdminDashboard() {
       try {
         const res = await fetch('/api/users?role=driver');
         const data = await res.json();
-        setDrivers(data);
+        setDrivers(Array.isArray(data) ? data : []);
       } catch (err) {
         console.error('Error fetching drivers:', err);
       }
@@ -146,14 +152,26 @@ export default function AdminDashboard() {
   }, []);
   const [isAddingPOI, setIsAddingPOI] = useState(false);
   const [newPOI, setNewPOI] = useState({ name: '', price: 0, tourPrice: 0, duration: '', imageUrl: '', status: 'Active' });
-  const [globalSettings, setGlobalSettings] = useState({ normal_price_per_km: 1.5, base_fare: 5.0 });
+  const [globalSettings, setGlobalSettings] = useState({ normal_price_per_km: 1.5, base_fare: 5.0, price_per_min: 0.5, min_fare: 15.0 });
 
   // Driver Registration States
   const [isAddingDriver, setIsAddingDriver] = useState(false);
   const [newDriver, setNewDriver] = useState({ displayName: '', email: '', phoneNumber: '', licenseNumber: '' });
+
+  const handleAdminLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (adminEmail.toLowerCase() === 'michaelsouzaxt21@gmail.com' && adminPassword === 'teste1234') {
+      setAdminAuthenticated(true);
+      setLoginError('');
+    } else {
+      setLoginError('Invalid credentials. Please try again.');
+    }
+  };
   
   // Filtering & History States
   const [driverStatusFilter, setDriverStatusFilter] = useState<'all' | 'available' | 'busy' | 'offline'>('all');
+  const [driverManagementFilter, setDriverManagementFilter] = useState<'all' | 'active' | 'pending' | 'rejected'>('all');
+  const [viewingDriverDocs, setViewingDriverDocs] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState<string | null>(null);
   const [historyData, setHistoryData] = useState<{lat: number, lng: number}[]>([]);
   const [typingUsers, setTypingUsers] = useState<{[key: string]: boolean}>({});
@@ -393,9 +411,11 @@ export default function AdminDashboard() {
   const deleteRide = async (rideId: string | number) => {
     try {
       await fetch(`/api/rides/${rideId}`, { method: 'DELETE' });
+      setRideToCancel(null);
+      addNotification('Ride cancelled successfully', 'success');
     } catch (error) {
       console.error('Error deleting ride:', error);
-      addNotification('Failed to delete ride', 'error');
+      addNotification('Failed to cancel ride', 'error');
     }
   };
 
@@ -458,7 +478,7 @@ export default function AdminDashboard() {
       const data = await res.json();
       setVehicleTypes(prev => [...prev, data]);
       setIsAddingVehicleType(false);
-      setNewVehicleType({ name: '', basePrice: 0, multiplier: 1.0, capacity: 4, description: '' });
+      setNewVehicleType({ name: '', basePrice: 0, multiplier: 1.0, pricePerKm: 0, pricePerMin: 0, minFare: 0, capacity: 4, description: '' });
       addNotification('Vehicle type added', 'success');
     } catch (error) {
       console.error('Error adding vehicle type:', error);
@@ -483,7 +503,6 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteVehicleType = async (id: number) => {
-    if (!window.confirm('Delete this vehicle type?')) return;
     try {
       await fetch(`/api/vehicle-types/${id}`, { method: 'DELETE' });
       setVehicleTypes(prev => prev.filter(t => t.id !== id));
@@ -494,7 +513,6 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteVehicle = async (id: string) => {
-    if (!window.confirm('Delete this vehicle?')) return;
     try {
       await fetch(`/api/vehicles/${id}`, { method: 'DELETE' });
       addNotification('Vehicle deleted', 'warning');
@@ -558,7 +576,6 @@ export default function AdminDashboard() {
   };
 
   const handleDeletePOI = async (id: string | number) => {
-    if (!window.confirm('Delete this POI?')) return;
     try {
       await fetch(`/api/pois/${id}`, { method: 'DELETE' });
       setPois(prev => prev.filter(p => p.id !== id));
@@ -584,15 +601,132 @@ export default function AdminDashboard() {
     }
   };
 
-  if (profile?.role !== 'admin') {
+  if (authLoading || (currentUser && !profile)) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-gray-100 p-6">
-        <Card className="max-w-md w-full p-8 text-center space-y-4">
-          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto">
-            <ShieldCheck size={32} className="text-red-600" />
+      <div className="flex-1 flex items-center justify-center bg-gray-100 p-6 min-h-screen">
+        <div className="flex flex-col items-center gap-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pex-gold"></div>
+          <p className="text-pex-blue font-medium">Verifying administrative privileges...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!adminAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-pex-blue p-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full"
+        >
+          <div className="text-center mb-12">
+            <div className="inline-block p-4 bg-pex-gold/10 rounded-full mb-4">
+              <Shield size={48} className="text-pex-gold" />
+            </div>
+            <h1 className="text-3xl font-light text-white tracking-widest uppercase">PEX <span className="text-pex-gold font-bold">ADMIN</span></h1>
+            <p className="text-white/40 text-sm mt-2">Secure Administrative Gateway</p>
           </div>
-          <h2 className="text-2xl font-bold text-pex-blue">Access Denied</h2>
-          <p className="text-gray-600">You do not have administrative privileges to access this dashboard.</p>
+
+          <Card className="bg-white/5 border-white/10 backdrop-blur-xl p-8 rounded-3xl shadow-2xl">
+            <form onSubmit={handleAdminLogin} className="space-y-6">
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-widest text-white/60 ml-1">Admin Email</Label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-gold/50" size={18} />
+                  <Input 
+                    type="email"
+                    placeholder="admin@pexride.com"
+                    className="bg-white/5 border-white/10 text-white pl-10 h-12 rounded-xl focus:ring-pex-gold"
+                    value={adminEmail}
+                    onChange={(e) => setAdminEmail(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-xs uppercase tracking-widest text-white/60 ml-1">Password</Label>
+                <div className="relative">
+                  <ShieldCheck className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-gold/50" size={18} />
+                  <Input 
+                    type="password"
+                    placeholder="••••••••"
+                    className="bg-white/5 border-white/10 text-white pl-10 h-12 rounded-xl focus:ring-pex-gold"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              {loginError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-3 text-red-500 text-sm">
+                  <AlertCircle size={16} />
+                  {loginError}
+                </div>
+              )}
+
+              <Button 
+                type="submit"
+                className="w-full bg-pex-gold hover:bg-white text-pex-blue font-bold h-12 rounded-xl transition-all"
+              >
+                Authenticate
+                <ChevronRight className="ml-2" size={18} />
+              </Button>
+            </form>
+          </Card>
+          
+          <p className="text-center text-white/20 text-[10px] mt-8 uppercase tracking-[0.2em]">
+            Authorized Personnel Only • Encrypted Session
+          </p>
+        </motion.div>
+      </div>
+    );
+  }
+
+  const isAdmin = profile?.role === 'admin' || currentUser?.email?.toLowerCase() === 'michaelsouzaxt21@gmail.com';
+
+  if (!currentUser || !isAdmin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100 p-6">
+        <Card className="max-w-md w-full p-8 text-center space-y-6 shadow-2xl border-none rounded-3xl">
+          <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto">
+            <Shield size={40} className="text-red-600" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-bold text-pex-blue">Access Denied</h2>
+            <p className="text-gray-600">You do not have administrative privileges to access this dashboard.</p>
+          </div>
+          
+          <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100 text-left space-y-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-gray-400 font-bold">Current User</p>
+              <p className="text-sm font-medium text-pex-blue truncate">{currentUser?.email || 'No email found'}</p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-gray-400 font-bold">Assigned Role</p>
+              <Badge variant="outline" className="mt-1 text-pex-gold border-pex-gold/30 bg-pex-gold/5">
+                {profile?.role || 'None'}
+              </Badge>
+            </div>
+          </div>
+
+          <div className="space-y-3 pt-4">
+            <Button 
+              className="w-full bg-pex-blue hover:bg-pex-blue/90 text-white rounded-xl h-12 font-medium"
+              onClick={() => navigate('/')}
+            >
+              Return to Home
+            </Button>
+            <Button 
+              variant="ghost"
+              className="w-full text-gray-400 hover:text-pex-blue hover:bg-transparent"
+              onClick={() => logout()}
+            >
+              Sign Out & Try Another Account
+            </Button>
+          </div>
         </Card>
       </div>
     );
@@ -796,6 +930,36 @@ export default function AdminDashboard() {
                             </Badge>
                           </div>
                           
+                          {/* Current Ride Info if Busy */}
+                          {loc.status === 'busy' && (
+                            <div className="p-2 bg-gray-50 rounded-lg border border-gray-100 space-y-2">
+                              {rides.find(r => r.driverId === loc.driverId && r.status === 'in-progress') && (
+                                <>
+                                  <div className="flex items-center gap-2">
+                                    <User size={12} className="text-pex-blue" />
+                                    <span className="text-[10px] font-medium">
+                                      {rides.find(r => r.driverId === loc.driverId && r.status === 'in-progress')?.passengerName}
+                                    </span>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <div className="flex items-start gap-2">
+                                      <div className="w-1.5 h-1.5 rounded-full bg-green-500 mt-1" />
+                                      <span className="text-[9px] text-gray-600 line-clamp-1">
+                                        {rides.find(r => r.driverId === loc.driverId && r.status === 'in-progress')?.pickupLocation}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-start gap-2">
+                                      <div className="w-1.5 h-1.5 rounded-full bg-pex-gold mt-1" />
+                                      <span className="text-[9px] text-gray-600 line-clamp-1">
+                                        {rides.find(r => r.driverId === loc.driverId && r.status === 'in-progress')?.dropoffLocation}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          
                           <div className="flex items-center gap-2 text-[10px] text-gray-400">
                             <Clock size={12} />
                             <span>Last updated: {new Date(loc.updatedAt).toLocaleTimeString()}</span>
@@ -825,6 +989,66 @@ export default function AdminDashboard() {
                               <Navigation size={14} className="mr-2" />
                               View Ride History
                             </Button>
+                          </div>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                ))}
+
+                {/* Real-time Ride Markers */}
+                {rides
+                  .filter(r => r.status === 'requested' || r.status === 'in-progress')
+                  .map((ride) => (
+                  <div
+                    key={ride.id}
+                    className="absolute -translate-x-1/2 -translate-y-1/2 z-10"
+                    style={{ 
+                      left: `${30 + (Math.random() * 40)}%`, 
+                      top: `${30 + (Math.random() * 40)}%` 
+                    }}
+                  >
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <motion.div
+                          initial={{ scale: 0 }}
+                          animate={{ scale: 1 }}
+                          whileHover={{ scale: 1.2 }}
+                          className="cursor-pointer"
+                        >
+                          <div className={`w-6 h-6 rounded-full border-2 border-white shadow-lg flex items-center justify-center ${
+                            ride.status === 'requested' ? 'bg-pex-gold' : 'bg-pex-blue'
+                          }`}>
+                            <MapPin size={12} className="text-white" />
+                          </div>
+                        </motion.div>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-64 p-4">
+                        <div className="space-y-3">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <h4 className="font-bold text-sm text-pex-blue">{ride.passengerName || 'Anonymous'}</h4>
+                              <p className="text-[10px] text-gray-500">Ride ID: {String(ride.id).slice(0, 8)}</p>
+                            </div>
+                            <Badge variant={ride.status === 'requested' ? 'secondary' : 'default'} className={ride.status === 'requested' ? 'bg-pex-gold text-pex-blue' : 'bg-pex-blue text-white'}>
+                              {ride.status}
+                            </Badge>
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex items-start gap-2">
+                              <div className="w-2 h-2 rounded-full bg-green-500 mt-1" />
+                              <div className="flex-1">
+                                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Pickup</p>
+                                <p className="text-xs text-gray-700">{ride.pickupLocation}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <div className="w-2 h-2 rounded-full bg-pex-gold mt-1" />
+                              <div className="flex-1">
+                                <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Dropoff</p>
+                                <p className="text-xs text-gray-700">{ride.dropoffLocation}</p>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </PopoverContent>
@@ -878,6 +1102,7 @@ export default function AdminDashboard() {
                       {/* Tooltip */}
                       <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-48 bg-white text-pex-blue p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-gray-100">
                         <p className="font-bold text-xs mb-1">Ride {ride.status === 'requested' ? 'Request' : 'In Progress'}</p>
+                        <p className="text-[10px] text-pex-blue font-bold mb-1">Passenger: {ride.passengerName || 'Anonymous'}</p>
                         <p className="text-[10px] text-gray-500 mb-1">From: {ride.pickupLocation}</p>
                         <p className="text-[10px] text-gray-500 mb-2">To: {ride.dropoffLocation}</p>
                         <div className="flex justify-between items-center text-[10px] font-bold text-pex-gold">
@@ -901,6 +1126,7 @@ export default function AdminDashboard() {
                           {/* Tooltip */}
                           <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-48 bg-white text-pex-blue p-3 rounded-lg shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 border border-gray-100">
                             <p className="font-bold text-xs mb-1">Ride Dropoff</p>
+                            <p className="text-[10px] text-pex-blue font-bold mb-1">Passenger: {ride.passengerName || 'Anonymous'}</p>
                             <p className="text-[10px] text-gray-500 mb-1">To: {ride.dropoffLocation}</p>
                           </div>
                         </div>
@@ -937,13 +1163,23 @@ export default function AdminDashboard() {
                                      className={ride.status === 'completed' ? 'bg-green-100 text-green-800 hover:bg-green-200' : ''}>
                                 {ride.status}
                               </Badge>
-                              <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => deleteRide(ride.id)}>
-                                <Trash2 size={12} className="text-red-500" />
-                              </Button>
+                              {ride.status !== 'completed' && ride.status !== 'cancelled' && (
+                                <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => setRideToCancel(ride)}>
+                                  <X size={12} className="text-red-500" />
+                                </Button>
+                              )}
                             </div>
                           </div>
                             <div className="text-sm text-gray-600 space-y-1">
-                              <p className="flex items-center gap-2 font-medium text-pex-blue"><Users size={14} /> {ride.passengerName || 'Anonymous'}</p>
+                              <div className="flex justify-between items-center">
+                                <p className="flex items-center gap-2 font-medium text-pex-blue"><Users size={14} /> {ride.passengerName || 'Anonymous'}</p>
+                                {(ride.status === 'completed' || ride.status === 'in-progress') && (
+                                  <div className="flex items-center gap-1 text-[10px] text-gray-400">
+                                    <Clock size={10} />
+                                    <span>{formatDuration(ride.startedAt || ride.createdAt, ride.completedAt)}</span>
+                                  </div>
+                                )}
+                              </div>
                               {ride.driverName && (
                                 <p className="flex items-center gap-2 text-xs font-semibold text-green-600"><Car size={14} /> Driver: {ride.driverName}</p>
                               )}
@@ -968,10 +1204,11 @@ export default function AdminDashboard() {
                                 <div className="flex flex-col items-end">
                                   <span className="text-[10px] text-gray-400">{ride.createdAt ? new Date(ride.createdAt).toLocaleTimeString() : 'Just now'}</span>
                                   {(ride.startedAt || ride.status === 'in_progress' || ride.status === 'completed') && (
-                                    <span className="text-[10px] text-pex-gold font-medium mt-1">
-                                      Duration: {formatDuration(ride.startedAt, ride.completedAt)}
+                                    <Badge variant="outline" className="mt-1 text-[10px] border-pex-gold/30 text-pex-gold bg-pex-gold/5 font-bold">
+                                      <Clock size={10} className="mr-1" />
+                                      {formatDuration(ride.startedAt, ride.completedAt)}
                                       {ride.status === 'in_progress' && ' (est.)'}
-                                    </span>
+                                    </Badge>
                                   )}
                                 </div>
                               </p>
@@ -1057,7 +1294,7 @@ export default function AdminDashboard() {
             <Tabs defaultValue="vehicles" className="w-full">
               <TabsList className="grid w-[400px] grid-cols-2 mb-8">
                 <TabsTrigger value="vehicles">Vehicles</TabsTrigger>
-                <TabsTrigger value="vehicle-types">Vehicle Types</TabsTrigger>
+                <TabsTrigger value="vehicle-types">Categories & Pricing</TabsTrigger>
               </TabsList>
 
               <TabsContent value="vehicles" className="space-y-6">
@@ -1189,9 +1426,9 @@ export default function AdminDashboard() {
 
           <TabsContent value="vehicle-types" className="space-y-6">
             <div className="flex justify-between items-center">
-              <h1 className="text-2xl font-bold text-pex-blue">Vehicle Types & Pricing</h1>
+              <h1 className="text-2xl font-bold text-pex-blue">Categories & Pricing</h1>
               <Button className="bg-pex-blue text-white" onClick={() => setIsAddingVehicleType(true)}>
-                <Plus size={16} className="mr-2" /> Add Type
+                <Plus size={16} className="mr-2" /> Add Category
               </Button>
             </div>
 
@@ -1213,6 +1450,18 @@ export default function AdminDashboard() {
                   <div className="space-y-2">
                     <Label>Price Multiplier</Label>
                     <Input type="number" step="0.1" value={newVehicleType.multiplier} onChange={e => setNewVehicleType({...newVehicleType, multiplier: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Price per KM (€)</Label>
+                    <Input type="number" step="0.01" value={newVehicleType.pricePerKm} onChange={e => setNewVehicleType({...newVehicleType, pricePerKm: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Price per Min (€)</Label>
+                    <Input type="number" step="0.01" value={newVehicleType.pricePerMin} onChange={e => setNewVehicleType({...newVehicleType, pricePerMin: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Min Fare (€)</Label>
+                    <Input type="number" step="0.01" value={newVehicleType.minFare} onChange={e => setNewVehicleType({...newVehicleType, minFare: parseFloat(e.target.value)})} />
                   </div>
                   <div className="space-y-2">
                     <Label>Capacity</Label>
@@ -1249,6 +1498,18 @@ export default function AdminDashboard() {
                     <Input type="number" step="0.1" value={editingVehicleType.multiplier} onChange={e => setEditingVehicleType({...editingVehicleType, multiplier: parseFloat(e.target.value)})} />
                   </div>
                   <div className="space-y-2">
+                    <Label>Price per KM (€)</Label>
+                    <Input type="number" step="0.01" value={editingVehicleType.pricePerKm} onChange={e => setEditingVehicleType({...editingVehicleType, pricePerKm: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Price per Min (€)</Label>
+                    <Input type="number" step="0.01" value={editingVehicleType.pricePerMin} onChange={e => setEditingVehicleType({...editingVehicleType, pricePerMin: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Min Fare (€)</Label>
+                    <Input type="number" step="0.01" value={editingVehicleType.minFare} onChange={e => setEditingVehicleType({...editingVehicleType, minFare: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
                     <Label>Capacity</Label>
                     <Input type="number" value={editingVehicleType.capacity} onChange={e => setEditingVehicleType({...editingVehicleType, capacity: parseInt(e.target.value)})} />
                   </div>
@@ -1278,6 +1539,9 @@ export default function AdminDashboard() {
                     </div>
                     <div className="grid grid-cols-2 gap-4 text-sm mb-4">
                       <div className="text-gray-500">Base Price: <span className="text-pex-blue font-medium">€{type.basePrice}</span></div>
+                      <div className="text-gray-500">Price/KM: <span className="text-pex-blue font-medium">€{type.pricePerKm}</span></div>
+                      <div className="text-gray-500">Price/Min: <span className="text-pex-blue font-medium">€{type.pricePerMin}</span></div>
+                      <div className="text-gray-500">Min Fare: <span className="text-pex-blue font-medium">€{type.minFare}</span></div>
                       <div className="text-gray-500">Capacity: <span className="text-pex-blue font-medium">{type.capacity} pax</span></div>
                     </div>
                     <div className="flex gap-2">
@@ -1297,9 +1561,21 @@ export default function AdminDashboard() {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h1 className="text-2xl font-bold text-pex-blue">Driver Management</h1>
-              <Button className="bg-pex-blue text-white" onClick={() => setIsAddingDriver(true)}>
-                <Plus size={16} className="mr-2" /> Register New Driver
-              </Button>
+              <div className="flex gap-3">
+                <select 
+                  className="h-10 rounded-md border border-gray-200 bg-white px-3 text-sm focus:ring-1 focus:ring-pex-gold outline-none"
+                  value={driverManagementFilter}
+                  onChange={(e) => setDriverManagementFilter(e.target.value as any)}
+                >
+                  <option value="all">All Status</option>
+                  <option value="active">Active</option>
+                  <option value="pending">Pending</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+                <Button className="bg-pex-blue text-white" onClick={() => setIsAddingDriver(true)}>
+                  <Plus size={16} className="mr-2" /> Register New Driver
+                </Button>
+              </div>
             </div>
 
             {isAddingDriver && (
@@ -1338,36 +1614,58 @@ export default function AdminDashboard() {
             )}
 
             <div className="grid grid-cols-1 gap-4">
-              {drivers.map((driver) => (
-                <Card key={driver.uid} className="p-4">
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-pex-blue/10 rounded-full flex items-center justify-center">
-                        <User size={24} className="text-pex-blue" />
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-pex-blue">{driver.displayName}</h3>
-                        <p className="text-sm text-gray-500">{driver.email}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <Badge className={
-                        driver.status === 'active' ? 'bg-green-100 text-green-800' :
-                        driver.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-red-100 text-red-800'
-                      }>
-                        {driver.status?.toUpperCase() || 'PENDING'}
-                      </Badge>
-                      {driver.status === 'pending' && (
-                        <div className="flex gap-2">
-                          <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => handleApproveDriver(driver.uid, 'active')}>Approve</Button>
-                          <Button size="sm" variant="destructive" onClick={() => handleApproveDriver(driver.uid, 'rejected')}>Reject</Button>
+              {drivers
+                .filter(d => driverManagementFilter === 'all' || d.status === driverManagementFilter)
+                .map((driver) => {
+                  const availability = driverLocations.find(l => l.driverId === driver.uid)?.status || 'offline';
+                  return (
+                    <Card key={driver.uid} className="p-4">
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-pex-blue/10 rounded-full flex items-center justify-center relative">
+                            <User size={24} className="text-pex-blue" />
+                            <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${
+                              availability === 'available' ? 'bg-green-500' : 
+                              availability === 'busy' ? 'bg-yellow-500' : 'bg-gray-400'
+                            }`} title={`Availability: ${availability}`} />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-pex-blue">{driver.displayName}</h3>
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm text-gray-500">{driver.email}</p>
+                              <span className="text-xs text-gray-300">|</span>
+                              <span className={`text-[10px] font-bold uppercase ${
+                                availability === 'available' ? 'text-green-600' : 
+                                availability === 'busy' ? 'text-yellow-600' : 'text-gray-400'
+                              }`}>
+                                {availability}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  </div>
-                </Card>
-              ))}
+                        <div className="flex items-center gap-4">
+                          <Badge className={
+                            driver.status === 'active' ? 'bg-green-100 text-green-800' :
+                            driver.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-red-100 text-red-800'
+                          }>
+                            {driver.status?.toUpperCase() || 'PENDING'}
+                          </Badge>
+                          {driver.status === 'pending' && (
+                            <div className="flex gap-2">
+                              <Button size="sm" variant="outline" className="border-pex-blue text-pex-blue" onClick={() => setViewingDriverDocs(driver.uid)}>View Docs</Button>
+                              <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => handleApproveDriver(driver.uid, 'active')}>Approve</Button>
+                              <Button size="sm" variant="destructive" onClick={() => handleApproveDriver(driver.uid, 'rejected')}>Reject</Button>
+                            </div>
+                          )}
+                          {driver.status !== 'pending' && (
+                            <Button size="sm" variant="outline" className="border-pex-blue text-pex-blue" onClick={() => setViewingDriverDocs(driver.uid)}>View Docs</Button>
+                          )}
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
               {drivers.length === 0 && (
                 <div className="text-center py-12 text-gray-400">
                   <Users size={48} className="mx-auto mb-2 opacity-20" />
@@ -1375,6 +1673,48 @@ export default function AdminDashboard() {
                 </div>
               )}
             </div>
+
+            {viewingDriverDocs && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                <Card className="w-full max-w-2xl bg-white p-6 max-h-[90vh] overflow-y-auto">
+                  <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-bold text-pex-blue">Driver Documents Verification</h2>
+                    <Button variant="ghost" size="icon" onClick={() => setViewingDriverDocs(null)}><X size={18} /></Button>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    {[
+                      { id: 'license', name: 'Driver\'s License', status: 'pending' },
+                      { id: 'professional', name: 'Professional License (VTC/TVDE)', status: 'pending' },
+                      { id: 'background', name: 'Criminal Record Certificate', status: 'pending' },
+                      { id: 'insurance', name: 'Commercial Insurance', status: 'pending' },
+                      { id: 'registration', name: 'Vehicle Registration', status: 'pending' },
+                      { id: 'photo', name: 'Professional Profile Photo', status: 'pending' }
+                    ].map(doc => (
+                      <div key={doc.id} className="flex items-center justify-between p-4 border rounded-lg">
+                        <div>
+                          <p className="font-bold text-sm text-pex-blue">{doc.name}</p>
+                          <p className="text-xs text-gray-400 mt-1">Uploaded on: {new Date().toLocaleDateString()}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" className="border-pex-blue text-pex-blue">View File</Button>
+                          <Button size="sm" className="bg-green-600 text-white">Verify</Button>
+                          <Button size="sm" variant="destructive">Reject</Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <div className="mt-8 flex justify-end gap-4 border-t pt-4">
+                    <Button variant="outline" onClick={() => setViewingDriverDocs(null)}>Close</Button>
+                    <Button className="bg-pex-blue text-white" onClick={() => {
+                      handleApproveDriver(viewingDriverDocs, 'active');
+                      setViewingDriverDocs(null);
+                    }}>Approve Driver</Button>
+                  </div>
+                </Card>
+              </div>
+            )}
           </div>
         )}
 
@@ -1396,21 +1736,41 @@ export default function AdminDashboard() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Base Fare (€)</Label>
-                    <Input 
-                      type="number" 
-                      value={globalSettings.base_fare} 
-                      onChange={e => setGlobalSettings({...globalSettings, base_fare: parseFloat(e.target.value)})}
-                    />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Base Fare (€)</Label>
+                      <Input 
+                        type="number" 
+                        value={globalSettings.base_fare} 
+                        onChange={e => setGlobalSettings({...globalSettings, base_fare: parseFloat(e.target.value)})}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Min Fare (€)</Label>
+                      <Input 
+                        type="number" 
+                        value={globalSettings.min_fare} 
+                        onChange={e => setGlobalSettings({...globalSettings, min_fare: parseFloat(e.target.value)})}
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Price per KM (€)</Label>
-                    <Input 
-                      type="number" 
-                      value={globalSettings.normal_price_per_km} 
-                      onChange={e => setGlobalSettings({...globalSettings, normal_price_per_km: parseFloat(e.target.value)})}
-                    />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Price per KM (€)</Label>
+                      <Input 
+                        type="number" 
+                        value={globalSettings.normal_price_per_km} 
+                        onChange={e => setGlobalSettings({...globalSettings, normal_price_per_km: parseFloat(e.target.value)})}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Price per Min (€)</Label>
+                      <Input 
+                        type="number" 
+                        value={globalSettings.price_per_min} 
+                        onChange={e => setGlobalSettings({...globalSettings, price_per_min: parseFloat(e.target.value)})}
+                      />
+                    </div>
                   </div>
                 </CardContent>
               </Card>

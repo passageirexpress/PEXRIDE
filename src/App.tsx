@@ -1,17 +1,22 @@
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import PassengerApp from './pages/PassengerApp';
+import BookingPage from './pages/BookingPage';
 import AdminDashboard from './pages/AdminDashboard';
 import DriverApp from './pages/DriverApp';
 import Login from './pages/Login';
+import DriverLogin from './pages/DriverLogin';
+import AirportTransfers from './pages/services/AirportTransfers';
+import CorporateTravel from './pages/services/CorporateTravel';
+import CuratedTours from './pages/services/CuratedTours';
+import EventLogistics from './pages/services/EventLogistics';
+import PrivacyPolicy from './pages/legal/PrivacyPolicy';
+import TermsOfService from './pages/legal/TermsOfService';
+import CookiePolicy from './pages/legal/CookiePolicy';
 import { Car, ShieldCheck, LogIn, LogOut, ExternalLink, Navigation, Info, Mail, Phone, MapPin, Instagram, Twitter, Facebook } from 'lucide-react';
 import { FirebaseProvider, useFirebase } from './FirebaseProvider';
 
 function AppContent() {
-  const { user, profile, signIn, logout, loading } = useFirebase();
-
-  const openInNewTab = () => {
-    window.open(window.location.href, '_blank');
-  };
+  const { user, profile, logout, loading } = useFirebase();
 
   if (loading) {
     return (
@@ -24,37 +29,34 @@ function AppContent() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <nav className="bg-pex-blue text-white p-4 flex justify-between items-center shadow-md z-50">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-pex-gold flex items-center justify-center">
-            <span className="text-pex-blue font-bold text-sm">PEX</span>
+        <Link to="/" className="flex items-center gap-2">
+          <img 
+            src="/logo.png" 
+            alt="Passageiro Express Luxury" 
+            className="h-12 object-contain"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+              e.currentTarget.nextElementSibling?.classList.remove('hidden');
+            }}
+          />
+          <div className="hidden flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-pex-gold flex items-center justify-center">
+              <span className="text-pex-blue font-bold text-sm">PEL</span>
+            </div>
+            <span className="font-semibold tracking-widest text-lg">Passageiro Express luxury</span>
           </div>
-          <span className="font-semibold tracking-widest text-lg">PEX RIDE</span>
-        </div>
+        </Link>
         <div className="flex gap-4 items-center">
-          <button 
-            onClick={openInNewTab}
-            className="flex items-center gap-2 hover:text-pex-gold transition-colors text-[10px] uppercase tracking-wider bg-white/10 px-3 py-1 rounded-full"
-            title="Open in new tab to fix cookie issues"
-          >
-            <ExternalLink size={12} />
-            New Tab
-          </button>
-          <Link to="/" className="flex items-center gap-2 hover:text-pex-gold transition-colors text-sm uppercase tracking-wider">
-            <Car size={16} />
-            Passenger App
-          </Link>
-          {(profile?.role === 'driver' || profile?.role === 'admin') && (
-            <Link to="/driver" className="flex items-center gap-2 hover:text-pex-gold transition-colors text-sm uppercase tracking-wider">
-              <Navigation size={16} />
-              Driver
-            </Link>
-          )}
           {profile?.role === 'admin' && (
             <Link to="/admin" className="flex items-center gap-2 hover:text-pex-gold transition-colors text-sm uppercase tracking-wider">
               <ShieldCheck size={16} />
               Admin
             </Link>
           )}
+          <Link to="/book" className="flex items-center gap-2 bg-pex-gold text-pex-blue px-4 py-1.5 rounded-full font-bold text-sm hover:bg-white transition-colors ml-4">
+            <Car size={16} />
+            BOOK NOW
+          </Link>
           {user ? (
             <div className="flex items-center gap-3 ml-4 border-l border-white/20 pl-4">
               <div className="flex flex-col items-end">
@@ -76,9 +78,18 @@ function AppContent() {
       <main className="flex-1 flex flex-col relative">
         <Routes>
           <Route path="/" element={<PassengerApp />} />
+          <Route path="/book" element={<BookingPage />} />
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/driver" element={<DriverApp />} />
+          <Route path="/driver/login" element={<DriverLogin />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/services/airport-transfers" element={<AirportTransfers />} />
+          <Route path="/services/corporate-travel" element={<CorporateTravel />} />
+          <Route path="/services/curated-tours" element={<CuratedTours />} />
+          <Route path="/services/event-logistics" element={<EventLogistics />} />
+          <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
+          <Route path="/legal/terms-of-service" element={<TermsOfService />} />
+          <Route path="/legal/cookie-policy" element={<CookiePolicy />} />
         </Routes>
       </main>
 
@@ -86,12 +97,23 @@ function AppContent() {
       <footer className="bg-pex-blue text-white pt-16 pb-8 border-t border-white/10">
         <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-12">
           <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-pex-gold flex items-center justify-center">
-                <span className="text-pex-blue font-bold text-sm">PEX</span>
+            <Link to="/" className="flex items-center gap-2">
+              <img 
+                src="/logo.png" 
+                alt="Passageiro Express Luxury" 
+                className="h-12 object-contain"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                  e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                }}
+              />
+              <div className="hidden flex items-center gap-2">
+                <div className="w-8 h-8 rounded-full bg-pex-gold flex items-center justify-center">
+                  <span className="text-pex-blue font-bold text-sm">PEL</span>
+                </div>
+                <span className="font-semibold tracking-widest text-lg">Passageiro Express luxury</span>
               </div>
-              <span className="font-semibold tracking-widest text-lg">PEX RIDE</span>
-            </div>
+            </Link>
             <p className="text-sm text-white/60 leading-relaxed">
               Experience the pinnacle of private transportation. Our elite chauffeur service provides quiet luxury, safety, and punctuality across Portugal's most exclusive destinations.
             </p>
@@ -107,7 +129,7 @@ function AppContent() {
             <ul className="space-y-3 text-sm text-white/60">
               <li><Link to="/" className="hover:text-white transition-colors">Book a Ride</Link></li>
               <li><Link to="/login" className="hover:text-white transition-colors">Client Login</Link></li>
-              <li><Link to="/driver" className="hover:text-white transition-colors">Driver Panel</Link></li>
+              <li><Link to="/driver" className="hover:text-white transition-colors">Driver Portal</Link></li>
               <li><Link to="/admin" className="hover:text-white transition-colors">Admin Dashboard</Link></li>
             </ul>
           </div>
@@ -115,10 +137,10 @@ function AppContent() {
           <div>
             <h4 className="font-bold text-pex-gold uppercase tracking-widest text-xs mb-6">Services</h4>
             <ul className="space-y-3 text-sm text-white/60">
-              <li className="hover:text-white cursor-pointer transition-colors">Airport Transfers</li>
-              <li className="hover:text-white cursor-pointer transition-colors">Corporate Travel</li>
-              <li className="hover:text-white cursor-pointer transition-colors">Curated Tours</li>
-              <li className="hover:text-white cursor-pointer transition-colors">Event Logistics</li>
+              <li><Link to="/services/airport-transfers" className="hover:text-white transition-colors">Airport Transfers</Link></li>
+              <li><Link to="/services/corporate-travel" className="hover:text-white transition-colors">Corporate Travel</Link></li>
+              <li><Link to="/services/curated-tours" className="hover:text-white transition-colors">Curated Tours</Link></li>
+              <li><Link to="/services/event-logistics" className="hover:text-white transition-colors">Event Logistics</Link></li>
             </ul>
           </div>
 
@@ -142,11 +164,11 @@ function AppContent() {
         </div>
         
         <div className="max-w-7xl mx-auto px-6 mt-16 pt-8 border-t border-white/5 flex flex-col md:flex-row justify-between items-center gap-4 text-[10px] uppercase tracking-widest text-white/40 font-bold">
-          <p>© 2026 PEX RIDE. All rights reserved.</p>
+          <p>© 2026 Passageiro Express luxury. All rights reserved.</p>
           <div className="flex gap-8">
-            <span className="hover:text-white cursor-pointer transition-colors">Privacy Policy</span>
-            <span className="hover:text-white cursor-pointer transition-colors">Terms of Service</span>
-            <span className="hover:text-white cursor-pointer transition-colors">Cookie Policy</span>
+            <Link to="/legal/privacy-policy" className="hover:text-white transition-colors">Privacy Policy</Link>
+            <Link to="/legal/terms-of-service" className="hover:text-white transition-colors">Terms of Service</Link>
+            <Link to="/legal/cookie-policy" className="hover:text-white transition-colors">Cookie Policy</Link>
           </div>
         </div>
       </footer>
