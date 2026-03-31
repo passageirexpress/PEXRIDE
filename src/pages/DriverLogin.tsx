@@ -39,7 +39,7 @@ export default function DriverLogin() {
       >
         <div className="text-center mb-8 flex flex-col items-center">
           <img 
-            src="/logo.png" 
+            src="/logo.svg" 
             alt="Passageiro Express Luxury" 
             className="h-16 object-contain mb-4"
             onError={(e) => {

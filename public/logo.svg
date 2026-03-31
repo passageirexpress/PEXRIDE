@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="100%" height="100%">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Great+Vibes&amp;family=Montserrat:wght@400;500;600&amp;display=swap');
+      
+      .title {
+        font-family: 'Montserrat', sans-serif;
+        font-weight: 500;
+        font-size: 36px;
+        letter-spacing: 16px;
+        fill: url(#goldGradient);
+        filter: url(#dropShadow);
+      }
+      
+      .subtitle {
+        font-family: 'Great Vibes', cursive;
+        font-size: 48px;
+        fill: url(#goldGradient);
+        filter: url(#dropShadow);
+      }
+    </style>
+    
+    <!-- Premium Metallic Gold Gradient -->
+    <linearGradient id="goldGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C59347" />
+      <stop offset="25%" stop-color="#E8C881" />
+      <stop offset="50%" stop-color="#FFF8D6" />
+      <stop offset="75%" stop-color="#D1A354" />
+      <stop offset="100%" stop-color="#8F6327" />
+    </linearGradient>
+
+    <!-- Darker Gold for depth/shadows -->
+    <linearGradient id="goldGradientDark" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8F6327" />
+      <stop offset="50%" stop-color="#D1A354" />
+      <stop offset="100%" stop-color="#FFF8D6" />
+    </linearGradient>
+
+    <!-- Subtle Drop Shadow for 3D effect -->
+    <filter id="dropShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.12"/>
+    </filter>
+
+    <!-- Inner Bevel/Emboss effect for metallic shine -->
+    <filter id="innerGlow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="1.5" result="blur"/>
+      <feSpecularLighting in="blur" surfaceScale="1.5" specularConstant="1.2" specularExponent="25" lighting-color="#ffffff" result="specOut">
+        <fePointLight x="400" y="-200" z="300"/>
+      </feSpecularLighting>
+      <feComposite in="specOut" in2="SourceAlpha" operator="in" result="specOut"/>
+      <feComposite in="SourceGraphic" in2="specOut" operator="arithmetic" k1="0" k2="1" k3="1" k4="0"/>
+    </filter>
+  </defs>
+
+  <!-- Transparent Background -->
+  <rect width="800" height="400" fill="transparent" />
+
+  <!-- Stylized Golden Wings Emblem -->
+  <g transform="translate(400, 130)" filter="url(#dropShadow)">
+    <g filter="url(#innerGlow)">
+      
+      <!-- Center Diamond/Shield (Aviation/Luxury Car style) -->
+      <polygon points="0,-45 22,-15 0,50 -22,-15" fill="url(#goldGradient)" />
+      <!-- Right side highlight for 3D effect -->
+      <polygon points="0,-45 22,-15 0,50" fill="url(#goldGradientDark)" opacity="0.6" />
+      
+      <!-- Left Wing (Sleek, geometric, conveying speed) -->
+      <path d="M -28,-15 L -240,-15 L -210,-3 L -28,-3 Z" fill="url(#goldGradient)" />
+      <path d="M -28,5 L -190,5 L -165,15 L -28,15 Z" fill="url(#goldGradient)" />
+      <path d="M -28,23 L -140,23 L -120,31 L -28,31 Z" fill="url(#goldGradient)" />
+
+      <!-- Right Wing (Symmetrical) -->
+      <path d="M 28,-15 L 240,-15 L 210,-3 L 28,-3 Z" fill="url(#goldGradient)" />
+      <path d="M 28,5 L 190,5 L 165,15 L 28,15 Z" fill="url(#goldGradient)" />
+      <path d="M 28,23 L 140,23 L 120,31 L 28,31 Z" fill="url(#goldGradient)" />
+      
+    </g>
+  </g>
+
+  <!-- Text: PASSAGEIRO EXPRESS -->
+  <text x="408" y="265" class="title" text-anchor="middle">PASSAGEIRO EXPRESS</text>
+
+  <!-- Text: Luxury with side lines -->
+  <g transform="translate(400, 325)">
+    <line x1="-180" y1="-14" x2="-80" y2="-14" stroke="url(#goldGradient)" stroke-width="1.5" filter="url(#dropShadow)" />
+    <text x="0" y="0" class="subtitle" text-anchor="middle">Luxury</text>
+    <line x1="80" y1="-14" x2="180" y2="-14" stroke="url(#goldGradient)" stroke-width="1.5" filter="url(#dropShadow)" />
+  </g>
+</svg>

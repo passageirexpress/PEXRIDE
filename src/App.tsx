@@ -31,7 +31,7 @@ function AppContent() {
       <nav className="bg-pex-blue text-white p-4 flex justify-between items-center shadow-md z-50">
         <Link to="/" className="flex items-center gap-2">
           <img 
-            src="/logo.png" 
+            src="/logo.svg" 
             alt="Passageiro Express Luxury" 
             className="h-12 object-contain"
             onError={(e) => {
@@ -99,7 +99,7 @@ function AppContent() {
           <div className="space-y-4">
             <Link to="/" className="flex items-center gap-2">
               <img 
-                src="/logo.png" 
+                src="/logo.svg" 
                 alt="Passageiro Express Luxury" 
                 className="h-12 object-contain"
                 onError={(e) => {
