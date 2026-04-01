@@ -29,13 +29,17 @@ import {
   ArrowRight,
   Shield,
   Star,
-  Users
+  Users,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useFirebase } from '../FirebaseProvider';
+import { useFirebase, handleFirestoreError, OperationType } from '../FirebaseProvider';
+import { db } from '../firebase';
+import { collection, addDoc, Timestamp, query, where, onSnapshot, orderBy } from 'firebase/firestore';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import { ADDRESS_COORDS, ADDRESS_SUGGESTIONS } from '../constants';
 
 // Fix Leaflet's default icon path issues
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -67,55 +71,46 @@ export default function BookingPage() {
   const [dropoff, setDropoff] = useState(state?.dropoff || '');
   const [pickupSuggestions, setPickupSuggestions] = useState<any[]>([]);
   const [dropoffSuggestions, setDropoffSuggestions] = useState<any[]>([]);
-  const [pickupCoords, setPickupCoords] = useState<{lat: number, lon: number} | null>(null);
-  const [dropoffCoords, setDropoffCoords] = useState<{lat: number, lon: number} | null>(null);
+  const [pickupCoords, setPickupCoords] = useState<{lat: number, lon: number} | null>(state?.pickupCoords || null);
+  const [dropoffCoords, setDropoffCoords] = useState<{lat: number, lon: number} | null>(state?.dropoffCoords || null);
   const [distance, setDistance] = useState<number | null>(null);
   const [duration, setDuration] = useState<number | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<[number, number][]>([]);
   
   const [selectedVehicleIdx, setSelectedVehicleIdx] = useState(0);
-  const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
+  const [vehicleTypes, setVehicleTypes] = useState<any[]>([
+    { id: 'business', name: 'Business Class', description: 'Mercedes E-Class, BMW 5 Series', capacity: 3, basePrice: 45, multiplier: 1, pricePerKm: 2.2, pricePerMin: 0.6, minFare: 50, hourlyRate: 65 },
+    { id: 'business_van', name: 'Business Van/SUV', description: 'Mercedes V-Class, Cadillac Escalade', capacity: 5, basePrice: 65, multiplier: 1.5, pricePerKm: 3.0, pricePerMin: 0.8, minFare: 75, hourlyRate: 85 },
+    { id: 'first_class', name: 'First Class', description: 'Mercedes S-Class, BMW 7 Series', capacity: 3, basePrice: 90, multiplier: 2, pricePerKm: 4.0, pricePerMin: 1.2, minFare: 100, hourlyRate: 120 }
+  ]);
   const [tripType, setTripType] = useState(state?.tripType || 'one-way');
   const [durationHours, setDurationHours] = useState(state?.duration || '4');
+  const [reservationTime, setReservationTime] = useState('');
+  const [paxCount, setPaxCount] = useState(1);
+  const [luggageCount, setLuggageCount] = useState(0);
   const [silentMode, setSilentMode] = useState(false);
   const [temperature, setTemperature] = useState([22]);
   const [selectedPlaylist, setSelectedPlaylist] = useState('Lounge & Jazz');
   
+  const [passengerName, setPassengerName] = useState('');
+  const [passengerPhone, setPassengerPhone] = useState('');
+  
   const [isBooking, setIsBooking] = useState(false);
   const [bookingSuccess, setBookingSuccess] = useState(false);
+  const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [isGeocoding, setIsGeocoding] = useState(false);
   
-  const ADDRESS_COORDS: Record<string, {lat: number, lon: number}> = {
-    'Rua Ilha de Santa Maria 4, 2840-426, Seixal': { lat: 38.627, lon: -9.102 },
-    'Rua Ilha de Santa Maria, Seixal': { lat: 38.627, lon: -9.102 },
-    'Colombo Shopping Centre, Lisbon': { lat: 38.755, lon: -9.189 },
-    'Vasco da Gama Shopping, Lisbon': { lat: 38.767, lon: -9.097 },
-    'Amoreiras Shopping Center, Lisbon': { lat: 38.723, lon: -9.162 },
-    'CascaiShopping, Cascais': { lat: 38.721, lon: -9.398 },
-    'NorteShopping, Porto': { lat: 41.180, lon: -8.654 },
-    'Arrábida Shopping, Vila Nova de Gaia': { lat: 41.140, lon: -8.638 },
-    '2840-426, Seixal': { lat: 38.627, lon: -9.102 },
-    'Lisbon Airport (LIS), Lisbon': { lat: 38.774, lon: -9.134 },
-    'Lisbon Airport': { lat: 38.774, lon: -9.134 },
-    'Porto Airport (OPO), Porto': { lat: 41.242, lon: -8.678 },
-    'Four Seasons Hotel Ritz, Lisbon': { lat: 38.725, lon: -9.155 },
-    'The Yeatman, Porto': { lat: 41.133, lon: -8.613 },
-    'Sintra National Palace, Sintra': { lat: 38.797, lon: -9.390 },
-    'Cascais Marina, Cascais': { lat: 38.691, lon: -9.419 },
-    'Algarve Luxury Resort, Faro': { lat: 37.017, lon: -7.930 }
-  };
+  const [pickupError, setPickupError] = useState(false);
+  const [dropoffError, setDropoffError] = useState(false);
 
-  const ADDRESS_SUGGESTIONS = [
-    'Four Seasons Hotel Ritz, Lisbon', 'The Yeatman, Porto', 'Sintra National Palace, Sintra', 'Cascais Marina, Cascais', 'Algarve Luxury Resort, Faro', 'Lisbon Airport (LIS), Lisbon', 'Porto Airport (OPO), Porto', 'Avenida da Liberdade, Lisbon', 'Ribeira District, Porto', 'Torre de Belém, Lisbon', 'Benagil Cave, Algarve', 'University of Coimbra, Coimbra', 'Évora Roman Temple, Évora', 'Fatima Sanctuary, Fatima', 'Óbidos Medieval Village, Óbidos',
-    'Eiffel Tower, Paris', 'Louvre Museum, Paris', 'Mont Saint-Michel, Normandy', 'Palace of Versailles, Versailles', 'Promenade des Anglais, Nice', 'Carcassonne Fortress, Carcassonne', 'Chamonix-Mont-Blanc, Alps', 'Verdon Gorge, Provence', 'Notre-Dame de Paris, Paris', 'Arc de Triomphe, Paris', 'Sacré-Cœur, Paris', 'Musée d\'Orsay, Paris',
-    'Sagrada Família, Barcelona', 'Alhambra, Granada', 'Prado Museum, Madrid', 'Seville Cathedral, Seville', 'Park Güell, Barcelona', 'Guggenheim Museum, Bilbao', 'Santiago de Compostela Cathedral, Galicia', 'Toledo Old City, Toledo',
-    'Rua Augusta, Lisbon', 'Chiado, Lisbon', 'Alfama, Lisbon', 'Bairro Alto, Lisbon', 'Belém, Lisbon', 'Parque das Nações, Lisbon', 'Cais do Sodré, Lisbon', 'Principe Real, Lisbon', 'Rua Garrett, Lisbon', 'Rua do Ouro, Lisbon', 'Rua da Prata, Lisbon', 'Avenida de Roma, Lisbon', 'Avenida Almirante Reis, Lisbon',
-    'Rua Ilha de Santa Maria 4, 2840-426, Seixal', 'Rua Ilha de Santa Maria, Seixal', 'Colombo Shopping Centre, Lisbon', 'Vasco da Gama Shopping, Lisbon', 'Amoreiras Shopping Center, Lisbon', 'CascaiShopping, Cascais', 'NorteShopping, Porto', 'Arrábida Shopping, Vila Nova de Gaia', '2840-426, Seixal', 'Lisbon Airport',
-    'Rua de Santa Catarina, Porto', 'Rua das Flores, Porto', 'Avenida dos Aliados, Porto', 'Foz do Douro, Porto', 'Vila Nova de Gaia, Porto', 'Matosinhos, Porto', 'Boavista, Porto', 'Campanhã, Porto', 'Cedofeita, Porto',
-    'Vilamoura, Algarve', 'Albufeira, Algarve', 'Lagos, Algarve', 'Tavira, Algarve', 'Portimão, Algarve', 'Sagres, Algarve', 'Quarteira, Algarve', 'Vale do Lobo, Algarve'
-  ];
+  useEffect(() => {
+    if (profile) {
+      setPassengerName(profile.displayName || user?.displayName || '');
+      setPassengerPhone(profile.phoneNumber || '');
+    }
+  }, [profile, user]);
 
   // Close suggestions when clicking outside
   useEffect(() => {
@@ -128,17 +123,17 @@ export default function BookingPage() {
   }, []);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const res = await fetch('/api/vehicle-types');
-        const data = await res.json();
-        console.log('Fetched vehicle types:', data);
-        setVehicleTypes(data);
-      } catch (err) {
-        console.error('Error fetching vehicle types:', err);
+    const unsubVehicleTypes = onSnapshot(collection(db, 'vehicle_types'), (snapshot) => {
+      if (!snapshot.empty) {
+        const types = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        console.log('Fetched vehicle types from Firestore:', types);
+        setVehicleTypes(types);
       }
-    };
-    fetchData();
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'vehicle_types');
+    });
+
+    return () => unsubVehicleTypes();
   }, []);
 
   const isSelectingPickup = React.useRef(false);
@@ -158,6 +153,7 @@ export default function BookingPage() {
       if (pickup.length > 2) {
         try {
           const res = await fetch(`/api/maps/autocomplete?input=${encodeURIComponent(pickup)}`);
+          if (!res.ok) throw new Error(`Server error: ${res.status}`);
           const data = await res.json();
           const suggestions = (data.predictions || []).map((p: any) => ({
             display_name: p.description,
@@ -193,6 +189,7 @@ export default function BookingPage() {
       if (dropoff.length > 2) {
         try {
           const res = await fetch(`/api/maps/autocomplete?input=${encodeURIComponent(dropoff)}`);
+          if (!res.ok) throw new Error(`Server error: ${res.status}`);
           const data = await res.json();
           const suggestions = (data.predictions || []).map((p: any) => ({
             display_name: p.description,
@@ -260,9 +257,8 @@ export default function BookingPage() {
       
       console.log('Falling back to OSRM...');
       // Fallback to OSRM if Google fails or returns no results
-      const osrmRes = await fetch(`https://router.project-osrm.org/route/v1/driving/${pCoords.lon},${pCoords.lat};${dCoords.lon},${dCoords.lat}?overview=full`, {
-        headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-      });
+      const osrmRes = await fetch(`/api/osrm/route?coordinates=${pCoords.lon},${pCoords.lat};${dCoords.lon},${dCoords.lat}`);
+      if (!osrmRes.ok) throw new Error(`OSRM error: ${osrmRes.status}`);
       const osrmData = await osrmRes.json();
       console.log('OSRM response:', osrmData);
       if (osrmData.routes && osrmData.routes[0]) {
@@ -318,21 +314,133 @@ export default function BookingPage() {
   };
 
   useEffect(() => {
-    if (pickupCoords && dropoffCoords) {
+    const geocodeInitial = async () => {
+      if (state?.pickup && !pickupCoords) {
+        if (ADDRESS_COORDS[state.pickup]) {
+          setPickupCoords(ADDRESS_COORDS[state.pickup]);
+        } else {
+          try {
+            const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(state.pickup)}`);
+            const data = await res.json();
+            if (data.results && data.results[0]) {
+              setPickupCoords({ 
+                lat: data.results[0].geometry.location.lat, 
+                lon: data.results[0].geometry.location.lng 
+              });
+            }
+          } catch (err) {
+            console.error('Initial pickup geocoding error:', err);
+          }
+        }
+      }
+      
+      if (state?.dropoff && !dropoffCoords && state?.tripType !== 'hourly') {
+        if (ADDRESS_COORDS[state.dropoff]) {
+          setDropoffCoords(ADDRESS_COORDS[state.dropoff]);
+        } else {
+          try {
+            const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(state.dropoff)}`);
+            const data = await res.json();
+            if (data.results && data.results[0]) {
+              setDropoffCoords({ 
+                lat: data.results[0].geometry.location.lat, 
+                lon: data.results[0].geometry.location.lng 
+              });
+            }
+          } catch (err) {
+            console.error('Initial dropoff geocoding error:', err);
+          }
+        }
+      }
+    };
+    geocodeInitial();
+  }, []);
+
+  useEffect(() => {
+    if (pickupCoords && dropoffCoords && tripType !== 'hourly') {
       calculateRoute(pickupCoords, dropoffCoords);
     }
-  }, [pickupCoords, dropoffCoords]);
+  }, [pickupCoords, dropoffCoords, tripType]);
 
   const selectedVehicle = vehicleTypes[selectedVehicleIdx] || { name: 'Business', basePrice: 15, multiplier: 1.5, pricePerKm: 0, pricePerMin: 0, minFare: 0, hourlyRate: 45 };
   
+  const handleCalculateRoute = async () => {
+    setIsGeocoding(true);
+    setError(null);
+    try {
+      let currentPickupCoords = pickupCoords;
+      if (!currentPickupCoords && pickup) {
+        if (ADDRESS_COORDS[pickup]) {
+          currentPickupCoords = ADDRESS_COORDS[pickup];
+          setPickupCoords(currentPickupCoords);
+        } else {
+          const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(pickup)}`);
+          const data = await res.json();
+          if (data.results && data.results[0]) {
+            currentPickupCoords = { 
+              lat: data.results[0].geometry.location.lat, 
+              lon: data.results[0].geometry.location.lng 
+            };
+            setPickupCoords(currentPickupCoords);
+          } else {
+            const nomRes = await fetch(`/api/nominatim/search?q=${encodeURIComponent(pickup)}`);
+            if (nomRes.ok) {
+              const nomData = await nomRes.json();
+              if (nomData && nomData[0]) {
+                currentPickupCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
+                setPickupCoords(currentPickupCoords);
+              }
+            }
+          }
+        }
+      }
+
+      let currentDropoffCoords = dropoffCoords;
+      if (tripType !== 'hourly' && !currentDropoffCoords && dropoff) {
+        if (ADDRESS_COORDS[dropoff]) {
+          currentDropoffCoords = ADDRESS_COORDS[dropoff];
+          setDropoffCoords(currentDropoffCoords);
+        } else {
+          const res = await fetch(`/api/maps/geocode?address=${encodeURIComponent(dropoff)}`);
+          const data = await res.json();
+          if (data.results && data.results[0]) {
+            currentDropoffCoords = { 
+              lat: data.results[0].geometry.location.lat, 
+              lon: data.results[0].geometry.location.lng 
+            };
+            setDropoffCoords(currentDropoffCoords);
+          } else {
+            const nomRes = await fetch(`/api/nominatim/search?q=${encodeURIComponent(dropoff)}`);
+            if (nomRes.ok) {
+              const nomData = await nomRes.json();
+              if (nomData && nomData[0]) {
+                currentDropoffCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
+                setDropoffCoords(currentDropoffCoords);
+              }
+            }
+          }
+        }
+      }
+
+      if (currentPickupCoords && currentDropoffCoords && tripType !== 'hourly') {
+        await calculateRoute(currentPickupCoords, currentDropoffCoords);
+      }
+    } catch (err: any) {
+      setError('Failed to calculate route. Please check the addresses.');
+    } finally {
+      setIsGeocoding(false);
+    }
+  };
+
   const calculateTotalPrice = () => {
     if (tripType === 'hourly') {
-      const hourlyRate = (Number(selectedVehicle.hourlyRate) || (Number(selectedVehicle.basePrice) * 3)) * (Number(selectedVehicle.multiplier) || 1);
+      const basePrice = Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0;
+      const hourlyRate = (Number(selectedVehicle.hourlyRate) || (basePrice * 3)) * (Number(selectedVehicle.multiplier) || 1);
       const subtotal = hourlyRate * Number(durationHours);
       return subtotal * 1.23; // Add 23% IVA
     }
 
-    const base = (Number(selectedVehicle.basePrice) || 0);
+    const base = Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0;
     const kmPrice = (Number(selectedVehicle.pricePerKm) || 1.5) * (distance || 0);
     const minPrice = (Number(selectedVehicle.pricePerMin) || 0.5) * (duration || 0);
     
@@ -350,12 +458,14 @@ export default function BookingPage() {
       navigate('/login');
       return;
     }
-    if (tripType !== 'hourly' && (!pickup || !dropoff)) {
-      setError('Please select both pickup and dropoff locations.');
+    if (!pickup) {
+      setPickupError(true);
+      setError('Please select a pickup location.');
       return;
     }
-    if (tripType === 'hourly' && !pickup) {
-      setError('Please select a pickup location.');
+    if (tripType !== 'hourly' && !dropoff) {
+      setDropoffError(true);
+      setError('Please select a dropoff location.');
       return;
     }
 
@@ -381,9 +491,8 @@ export default function BookingPage() {
             setPickupCoords(currentPickupCoords);
           } else {
             // Fallback to Nominatim
-            const nomRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(pickup)}&limit=1`, {
-              headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-            });
+            const nomRes = await fetch(`/api/nominatim/search?q=${encodeURIComponent(pickup)}`);
+            if (!nomRes.ok) throw new Error(`Nominatim error: ${nomRes.status}`);
             const nomData = await nomRes.json();
             if (nomData && nomData[0]) {
               currentPickupCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
@@ -411,9 +520,8 @@ export default function BookingPage() {
               setDropoffCoords(currentDropoffCoords);
             } else {
               // Fallback to Nominatim
-              const nomRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dropoff)}&limit=1`, {
-                headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-              });
+              const nomRes = await fetch(`/api/nominatim/search?q=${encodeURIComponent(dropoff)}`);
+              if (!nomRes.ok) throw new Error(`Nominatim error: ${nomRes.status}`);
               const nomData = await nomRes.json();
               if (nomData && nomData[0]) {
                 currentDropoffCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
@@ -453,11 +561,12 @@ export default function BookingPage() {
       // Recalculate price with final distance/duration
       let finalTotalPrice = 0;
       if (tripType === 'hourly') {
-        const hourlyRate = (Number(selectedVehicle.hourlyRate) || (Number(selectedVehicle.basePrice) * 3)) * (Number(selectedVehicle.multiplier) || 1);
+        const basePrice = Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0;
+        const hourlyRate = (Number(selectedVehicle.hourlyRate) || (basePrice * 3)) * (Number(selectedVehicle.multiplier) || 1);
         const subtotal = hourlyRate * Number(durationHours);
         finalTotalPrice = subtotal * 1.23;
       } else {
-        const base = (Number(selectedVehicle.basePrice) || 0);
+        const base = Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0;
         const kmPrice = (Number(selectedVehicle.pricePerKm) || 1.5) * (finalDistance || 0);
         const minPrice = (Number(selectedVehicle.pricePerMin) || 0.5) * (finalDuration || 0);
         
@@ -468,29 +577,63 @@ export default function BookingPage() {
         finalTotalPrice = subtotal * 1.23;
       }
 
-      const response = await fetch('/api/rides', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          passengerId: user.uid,
-          passengerName: user.displayName || profile?.displayName || 'Anonymous',
-          pickupLocation: pickup,
-          dropoffLocation: tripType === 'hourly' ? `Hourly Booking (${durationHours}h)` : dropoff,
-          rideType: selectedVehicle.name,
-          vehicleName: selectedVehicle.name === 'Business' ? 'Mercedes S-Class' : selectedVehicle.name === 'SUV' ? 'Range Rover' : 'Mercedes V-Class',
-          price: finalTotalPrice,
-          preferences: {
-            silentMode,
-            temperature: temperature[0],
-            playlist: selectedPlaylist,
-            tripType,
-            durationHours: tripType === 'hourly' ? Number(durationHours) : null
-          }
-        }),
-      });
-
-      if (!response.ok) throw new Error('Failed to book ride');
+      // Call Payment API
+      let paymentOrderCode = null;
+      let checkoutUrl = null;
       
+      try {
+        const paymentRes = await fetch('/api/payments/viva/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: finalTotalPrice,
+            customerEmail: user.email || 'customer@example.com',
+            description: `Pex Ride Booking - ${selectedVehicle.name}`
+          })
+        });
+
+        if (paymentRes.ok) {
+          const paymentData = await paymentRes.json();
+          paymentOrderCode = paymentData.orderCode;
+          checkoutUrl = paymentData.checkoutUrl;
+        } else {
+          console.warn('Payment initialization failed, proceeding with booking anyway for testing.');
+        }
+      } catch (e) {
+        console.warn('Payment API error:', e);
+      }
+
+      // Save ride to Firestore
+      await addDoc(collection(db, 'rides'), {
+        passengerId: user.uid,
+        passengerName: passengerName || user.displayName || profile?.displayName || 'Anonymous',
+        passengerPhone: passengerPhone || '',
+        pickupLocation: pickup,
+        dropoffLocation: tripType === 'hourly' ? `Hourly Booking (${durationHours}h)` : dropoff,
+        rideType: selectedVehicle.name,
+        vehicleName: selectedVehicle.name === 'Business' ? 'Mercedes S-Class' : selectedVehicle.name === 'SUV' ? 'Range Rover' : 'Mercedes V-Class',
+        price: finalTotalPrice,
+        estimatedDuration: duration,
+        estimatedDistance: distance,
+        status: checkoutUrl ? 'Pending Payment' : 'Pending',
+        paymentOrderCode,
+        paymentUrl: checkoutUrl,
+        createdAt: Timestamp.now(),
+        reservationTime: reservationTime ? Timestamp.fromDate(new Date(reservationTime)) : Timestamp.now(),
+        paxCount: Number(paxCount),
+        luggageCount: Number(luggageCount),
+        preferences: {
+          silentMode,
+          temperature: temperature[0],
+          playlist: selectedPlaylist,
+          tripType,
+          durationHours: tripType === 'hourly' ? Number(durationHours) : null
+        }
+      });
+      
+      if (checkoutUrl) {
+        setPaymentUrl(checkoutUrl);
+      }
       setBookingSuccess(true);
     } catch (err: any) {
       setError(err.message);
@@ -500,12 +643,12 @@ export default function BookingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20">
+    <div className="min-h-screen bg-white pb-20">
       {/* Header */}
       <div className="bg-pex-blue text-white py-12 px-6">
         <div className="max-w-4xl mx-auto">
           <h1 className="text-4xl font-light tracking-tight mb-2">Book Your Journey</h1>
-          <p className="text-white/60 font-light">Experience the pinnacle of private transportation.</p>
+          <p className="text-white/90 font-light">Experience the pinnacle of private transportation.</p>
         </div>
       </div>
 
@@ -513,24 +656,104 @@ export default function BookingPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left Column: Locations & Preferences */}
           <div className="lg:col-span-2 space-y-6">
+            {/* Passenger Information */}
+            <Card className="shadow-xl border border-gray-100 overflow-hidden">
+              <CardHeader className="bg-white border-b border-gray-100">
+                <CardTitle className="text-lg font-medium text-pex-blue flex items-center gap-2">
+                  <Users size={20} className="text-pex-gold" />
+                  Passenger Information
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-xs uppercase tracking-widest text-gray-700 font-semibold">Full Name</Label>
+                    <Input 
+                      placeholder="Enter your name..." 
+                      className="h-12 bg-white border border-gray-200 focus-visible:ring-pex-gold text-gray-900"
+                      value={passengerName}
+                      onChange={(e) => setPassengerName(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs uppercase tracking-widest text-gray-700 font-semibold">Phone Number</Label>
+                    <Input 
+                      placeholder="Enter your phone..." 
+                      className="h-12 bg-white border border-gray-200 focus-visible:ring-pex-gold text-gray-900"
+                      value={passengerPhone}
+                      onChange={(e) => setPassengerPhone(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             {/* Location Selection */}
-            <Card className="shadow-xl border-none">
+            <Card className="shadow-xl border border-gray-100 overflow-hidden">
               <CardHeader className="bg-white border-b border-gray-100">
                 <CardTitle className="text-lg font-medium text-pex-blue flex items-center gap-2">
                   <Navigation size={20} className="text-pex-gold" />
-                  Route Details
+                  Journey Details
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-6 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-xs uppercase tracking-widest text-gray-700 font-semibold">Pickup Date & Time</Label>
+                    <div className="relative">
+                      <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-gold" size={18} />
+                      <Input 
+                        type="datetime-local" 
+                        className="pl-10 h-12 bg-white border border-gray-200 focus-visible:ring-pex-gold text-gray-900"
+                        value={reservationTime}
+                        onChange={(e) => setReservationTime(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-xs uppercase tracking-widest text-gray-700 font-semibold">Passengers</Label>
+                      <div className="relative">
+                        <Users className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-gold" size={18} />
+                        <Input 
+                          type="number" 
+                          min={1} 
+                          max={8}
+                          className="pl-10 h-12 bg-white border border-gray-200 focus-visible:ring-pex-gold text-gray-900"
+                          value={paxCount}
+                          onChange={(e) => setPaxCount(parseInt(e.target.value))}
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs uppercase tracking-widest text-gray-700 font-semibold">Luggage</Label>
+                      <div className="relative">
+                        <Car className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-gold" size={18} />
+                        <Input 
+                          type="number" 
+                          min={0} 
+                          max={8}
+                          className="pl-10 h-12 bg-white border border-gray-200 focus-visible:ring-pex-gold text-gray-900"
+                          value={luggageCount}
+                          onChange={(e) => setLuggageCount(parseInt(e.target.value))}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="relative">
-                  <Label className="text-xs uppercase tracking-widest text-gray-400 mb-2 block">Pickup Location</Label>
+                  <Label className="text-xs uppercase tracking-widest text-gray-700 font-semibold mb-2 block">Pickup Location</Label>
                   <div className="relative" onClick={(e) => e.stopPropagation()}>
-                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-gold" size={18} />
+                    <MapPin className={`absolute left-3 top-1/2 -translate-y-1/2 ${pickupError ? 'text-red-500' : 'text-pex-gold'}`} size={18} />
                     <Input 
                       placeholder="Enter pickup address..." 
-                      className="pl-10 h-12 bg-gray-50 border-none focus-visible:ring-pex-gold"
+                      className={`pl-10 h-12 bg-white border focus-visible:ring-pex-gold text-gray-900 ${pickupError ? 'border-red-500' : 'border-gray-200'}`}
                       value={pickup}
-                      onChange={(e) => handlePickupChange(e.target.value)}
+                      onChange={(e) => {
+                        handlePickupChange(e.target.value);
+                        if (e.target.value) setPickupError(false);
+                      }}
                       onFocus={() => {
                         if (pickup.length > 1) {
                           handlePickupChange(pickup);
@@ -549,7 +772,7 @@ export default function BookingPage() {
                         {pickupSuggestions.map((s, i) => (
                           <button 
                             key={i}
-                            className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-none"
+                            className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-none text-gray-900"
                             onClick={async () => { 
                               isSelectingPickup.current = true;
                               setPickup(s.display_name); 
@@ -570,9 +793,8 @@ export default function BookingPage() {
                                 }
                               } else if (s.isHardcoded) {
                                 try {
-                                  const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(s.display_name)}&limit=1`, {
-                                    headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-                                  });
+                                  const res = await fetch(`/api/nominatim/search?q=${encodeURIComponent(s.display_name)}`);
+                                  if (!res.ok) throw new Error(`Nominatim error: ${res.status}`);
                                   const data = await res.json();
                                   if (data && data[0]) {
                                     setPickupCoords({ lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) });
@@ -595,14 +817,14 @@ export default function BookingPage() {
                 </div>
 
                 <div className="relative">
-                  <Label className="text-xs uppercase tracking-widest text-gray-400 mb-2 block">
+                  <Label className="text-xs uppercase tracking-widest text-gray-700 font-semibold mb-2 block">
                     {tripType === 'hourly' ? 'Duration' : 'Dropoff Location'}
                   </Label>
                   {tripType === 'hourly' ? (
                     <div className="relative">
                       <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-blue" size={18} />
                       <select 
-                        className="pl-10 h-12 w-full bg-gray-50 border-none focus-visible:ring-pex-gold rounded-md text-sm"
+                        className="pl-10 h-12 w-full bg-white border border-gray-200 focus-visible:ring-pex-gold rounded-md text-sm text-gray-900"
                         value={durationHours}
                         onChange={(e) => setDurationHours(e.target.value)}
                       >
@@ -614,12 +836,15 @@ export default function BookingPage() {
                   ) : (
                     <>
                       <div className="relative" onClick={(e) => e.stopPropagation()}>
-                        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-pex-blue" size={18} />
+                        <MapPin className={`absolute left-3 top-1/2 -translate-y-1/2 ${dropoffError ? 'text-red-500' : 'text-pex-blue'}`} size={18} />
                         <Input 
                           placeholder="Enter destination..." 
-                          className="pl-10 h-12 bg-gray-50 border-none focus-visible:ring-pex-gold"
+                          className={`pl-10 h-12 bg-white border focus-visible:ring-pex-gold text-gray-900 ${dropoffError ? 'border-red-500' : 'border-gray-200'}`}
                           value={dropoff}
-                          onChange={(e) => handleDropoffChange(e.target.value)}
+                          onChange={(e) => {
+                            handleDropoffChange(e.target.value);
+                            if (e.target.value) setDropoffError(false);
+                          }}
                           onFocus={() => {
                             if (dropoff.length > 1) {
                               handleDropoffChange(dropoff);
@@ -638,7 +863,7 @@ export default function BookingPage() {
                             {dropoffSuggestions.map((s, i) => (
                               <button 
                                 key={i}
-                                className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-none"
+                                className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-none text-gray-900"
                                 onClick={async () => { 
                                   isSelectingDropoff.current = true;
                                   setDropoff(s.display_name); 
@@ -659,9 +884,8 @@ export default function BookingPage() {
                                     }
                                   } else if (s.isHardcoded) {
                                     try {
-                                      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(s.display_name)}&limit=1`, {
-                                        headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-                                      });
+                                      const res = await fetch(`/api/nominatim/search?q=${encodeURIComponent(s.display_name)}`);
+                                      if (!res.ok) throw new Error(`Nominatim error: ${res.status}`);
                                       const data = await res.json();
                                       if (data && data[0]) {
                                         setDropoffCoords({ lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) });
@@ -684,11 +908,24 @@ export default function BookingPage() {
                     </>
                   )}
                 </div>
+                <div className="flex justify-end mt-4">
+                  <Button 
+                    onClick={handleCalculateRoute} 
+                    disabled={isGeocoding || !pickup || (tripType !== 'hourly' && !dropoff)}
+                    className="bg-pex-blue hover:bg-pex-blue/90 text-white"
+                  >
+                    {isGeocoding ? (
+                      <span className="flex items-center gap-2"><RefreshCw className="animate-spin" size={16} /> Calculating...</span>
+                    ) : (
+                      <span className="flex items-center gap-2"><Navigation size={16} /> Calculate Route & Price</span>
+                    )}
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 
             {/* Vehicle Selection */}
-            <Card className="shadow-xl border-none overflow-hidden">
+            <Card className="shadow-xl border border-gray-100 overflow-hidden">
               <CardHeader className="bg-white border-b border-gray-100">
                 <CardTitle className="text-lg font-medium text-pex-blue flex items-center gap-2">
                   <Car size={20} className="text-pex-gold" />
@@ -704,7 +941,7 @@ export default function BookingPage() {
                       className={`relative p-4 rounded-xl border-2 transition-all text-left ${
                         selectedVehicleIdx === i 
                           ? 'border-pex-gold bg-pex-gold/5 shadow-md' 
-                          : 'border-gray-100 hover:border-pex-gold/30'
+                          : 'border-gray-200 bg-white hover:border-pex-gold/30'
                       }`}
                     >
                       {selectedVehicleIdx === i && (
@@ -712,15 +949,19 @@ export default function BookingPage() {
                           <CheckCircle2 size={16} />
                         </div>
                       )}
-                      <div className="text-xs uppercase tracking-widest text-gray-400 mb-1">{vt.name}</div>
+                      <div className="text-xs uppercase tracking-widest text-gray-700 mb-1">{vt.name}</div>
                       <div className="font-bold text-pex-blue mb-2">
                         {vt.description || vt.name}
                       </div>
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <Users size={12} /> {vt.capacity} Pax
+                      <div className="flex items-center gap-3 text-xs text-gray-700">
+                        <span className="flex items-center gap-1"><Users size={12} /> {vt.capacity}</span>
+                        <span className="flex items-center gap-1"><Car size={12} /> {vt.name.includes('SUV') ? '4' : '2'} Bags</span>
                       </div>
-                      <div className="mt-4 text-lg font-light text-pex-gold">
-                        €{(vt.base_price * vt.multiplier).toFixed(2)}
+                      <div className="mt-4 flex items-end justify-between">
+                        <div className="text-lg font-light text-pex-gold">
+                          €{((vt.basePrice || vt.base_price || 0) * (vt.multiplier || 1)).toFixed(2)}
+                        </div>
+                        <Badge variant="outline" className="text-[10px] border-gray-300 text-gray-700">Select</Badge>
                       </div>
                     </button>
                   ))}
@@ -729,7 +970,7 @@ export default function BookingPage() {
             </Card>
 
             {/* Preferences */}
-            <Card className="shadow-xl border-none overflow-hidden">
+            <Card className="shadow-xl border border-gray-100 overflow-hidden">
               <CardHeader className="bg-white border-b border-gray-100">
                 <CardTitle className="text-lg font-medium text-pex-blue flex items-center gap-2">
                   <Shield size={20} className="text-pex-gold" />
@@ -742,7 +983,7 @@ export default function BookingPage() {
                     <div className="flex items-center justify-between">
                       <div className="space-y-0.5">
                         <Label className="text-sm font-medium text-pex-blue">Silent Mode</Label>
-                        <p className="text-xs text-gray-400 italic">No conversation unless requested</p>
+                        <p className="text-xs text-gray-700 italic">No conversation unless requested</p>
                       </div>
                       <Switch checked={silentMode} onCheckedChange={setSilentMode} />
                     </div>
@@ -774,7 +1015,7 @@ export default function BookingPage() {
                             className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${
                               tripType === type 
                                 ? 'bg-pex-blue text-white shadow-md' 
-                                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                                : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
                             }`}
                           >
                             {type === 'one-way' ? 'One Way' : 'By the Hour'}
@@ -786,7 +1027,7 @@ export default function BookingPage() {
                     <div className="space-y-2">
                       <Label className="text-sm font-medium text-pex-blue">Ambient Music</Label>
                       <select 
-                        className="w-full h-10 rounded-lg border-none bg-gray-100 px-3 text-xs focus:ring-1 focus:ring-pex-gold outline-none"
+                        className="w-full h-10 rounded-lg border border-gray-200 bg-white px-3 text-xs focus:ring-1 focus:ring-pex-gold outline-none text-gray-900"
                         value={selectedPlaylist}
                         onChange={(e) => setSelectedPlaylist(e.target.value)}
                       >
@@ -845,14 +1086,14 @@ export default function BookingPage() {
                 <div className="space-y-4">
                   <div className="flex justify-between items-start">
                     <div className="space-y-1">
-                      <p className="text-[10px] uppercase tracking-widest text-gray-400">Vehicle</p>
+                      <p className="text-[10px] uppercase tracking-widest text-gray-600">Vehicle</p>
                       <p className="font-bold text-pex-blue">{selectedVehicle.name === 'Business' ? 'Mercedes S-Class' : selectedVehicle.name === 'SUV' ? 'Range Rover' : 'Mercedes V-Class'}</p>
                     </div>
                     <Badge variant="outline" className="text-[10px] border-pex-gold text-pex-gold">{selectedVehicle.name}</Badge>
                   </div>
 
                   <div className="space-y-2">
-                    <p className="text-[10px] uppercase tracking-widest text-gray-400">Route Details</p>
+                    <p className="text-[10px] uppercase tracking-widest text-gray-600">Route Details</p>
                     <div className="space-y-2">
                       <div className="flex items-center gap-2 text-sm text-pex-blue">
                         <div className="w-2 h-2 rounded-full bg-pex-gold" />
@@ -891,7 +1132,7 @@ export default function BookingPage() {
                         Calculating distance...
                       </div>
                     ) : (
-                      <div className="mt-2 text-[10px] text-gray-400 italic uppercase tracking-widest">
+                      <div className="mt-2 text-[10px] text-gray-600 italic uppercase tracking-widest">
                         Distance will be calculated upon booking
                       </div>
                     )}
@@ -902,7 +1143,7 @@ export default function BookingPage() {
                         <>
                           <div className="flex justify-between items-center mb-1">
                             <span className="text-sm text-gray-500">Hourly Rate</span>
-                            <span className="text-sm font-medium">€{((Number(selectedVehicle.hourlyRate) || (Number(selectedVehicle.basePrice) * 3)) * (Number(selectedVehicle.multiplier) || 1)).toFixed(2)}/h</span>
+                            <span className="text-sm font-medium">€{((Number(selectedVehicle.hourlyRate) || ((Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0) * 3)) * (Number(selectedVehicle.multiplier) || 1)).toFixed(2)}/h</span>
                           </div>
                           <div className="flex justify-between items-center mb-1">
                             <span className="text-sm text-gray-500">Duration</span>
@@ -978,7 +1219,7 @@ export default function BookingPage() {
                   )}
                 </Button>
 
-                <p className="text-[10px] text-center text-gray-400 mt-4">
+                <p className="text-[10px] text-center text-gray-600 mt-4">
                   By confirming, you agree to our Terms of Service and Privacy Policy.
                 </p>
                 <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-100">
@@ -1002,13 +1243,28 @@ export default function BookingPage() {
             <CheckCircle2 size={40} className="text-green-600" />
           </div>
           <DialogHeader>
-            <DialogTitle className="text-2xl font-bold text-pex-blue mb-2">Booking Confirmed!</DialogTitle>
+            <DialogTitle className="text-2xl font-bold text-pex-blue mb-2">
+              {paymentUrl ? 'Booking Initiated!' : 'Booking Confirmed!'}
+            </DialogTitle>
             <DialogDescription className="text-gray-500">
-              Your chauffeur has been notified and is preparing for your journey. You can track your ride in the dashboard.
+              {paymentUrl 
+                ? 'Your booking has been created. Please proceed to payment to finalize your reservation.'
+                : 'Your chauffeur has been notified and is preparing for your journey. You can track your ride in the dashboard.'}
             </DialogDescription>
           </DialogHeader>
-          <div className="mt-8">
-            <Button className="w-full bg-pex-blue text-white h-12" onClick={() => navigate('/')}>
+          <div className="mt-8 space-y-3">
+            {paymentUrl && (
+              <Button 
+                className="w-full bg-pex-gold text-pex-blue font-bold h-12 hover:bg-pex-blue hover:text-white transition-colors" 
+                onClick={() => window.open(paymentUrl, '_blank')}
+              >
+                Proceed to Payment
+              </Button>
+            )}
+            <Button 
+              className={`w-full h-12 ${paymentUrl ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'bg-pex-blue text-white hover:bg-pex-blue/90'}`} 
+              onClick={() => navigate('/')}
+            >
               Return to Home
             </Button>
           </div>

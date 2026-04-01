@@ -28,11 +28,10 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Shield, Bell, Send, Car, UserPlus, X, VolumeX, Thermometer, History, LayoutDashboard, Navigation, ChevronRight, RefreshCw, Settings, CreditCard, MapPin, User } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { useFirebase } from '../FirebaseProvider';
-import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, limit, addDoc, serverTimestamp, setDoc, getDocs } from 'firebase/firestore';
+import { useFirebase, handleFirestoreError, OperationType } from '../FirebaseProvider';
+import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, limit, addDoc, serverTimestamp, setDoc, getDocs, where, Timestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { motion, AnimatePresence } from 'motion/react';
-import { socket } from '../lib/socket';
 import { useNavigate } from 'react-router-dom';
 
 const revenueData = [
@@ -137,19 +136,278 @@ export default function AdminDashboard() {
   const [drivers, setDrivers] = useState<any[]>([]);
 
   useEffect(() => {
-    const fetchDrivers = async () => {
-      try {
-        const res = await fetch('/api/users?role=driver');
-        const data = await res.json();
-        setDrivers(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error('Error fetching drivers:', err);
-      }
+    if (profile?.role !== 'admin') return;
+
+    const unsubRides = onSnapshot(
+      query(collection(db, 'rides'), orderBy('createdAt', 'desc'), limit(100)),
+      (snapshot) => {
+        setRides(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Ride)));
+        setLoading(false);
+      },
+      (err) => handleFirestoreError(err, OperationType.GET, 'rides')
+    );
+
+    const unsubLocations = onSnapshot(
+      collection(db, 'driver_locations'),
+      (snapshot) => {
+        setDriverLocations(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DriverLocation)));
+      },
+      (err) => handleFirestoreError(err, OperationType.GET, 'driver_locations')
+    );
+
+    const unsubVehicles = onSnapshot(
+      collection(db, 'vehicles'),
+      (snapshot) => {
+        setVehicles(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Vehicle)));
+      },
+      (err) => handleFirestoreError(err, OperationType.GET, 'vehicles')
+    );
+
+    const unsubPois = onSnapshot(
+      collection(db, 'pois'),
+      (snapshot) => {
+        setPois(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as POI)));
+      },
+      (err) => handleFirestoreError(err, OperationType.GET, 'pois')
+    );
+
+    const unsubVehicleTypes = onSnapshot(
+      collection(db, 'vehicle_types'),
+      (snapshot) => {
+        setVehicleTypes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      },
+      (err) => handleFirestoreError(err, OperationType.GET, 'vehicle_types')
+    );
+
+    const unsubSettings = onSnapshot(
+      collection(db, 'settings'),
+      (snapshot) => {
+        snapshot.docs.forEach(doc => {
+          if (doc.id === 'pricing') {
+            setGlobalSettings(doc.data().value);
+          }
+        });
+      },
+      (err) => handleFirestoreError(err, OperationType.GET, 'settings')
+    );
+
+    const unsubUsers = onSnapshot(
+      collection(db, 'users'),
+      (snapshot) => {
+        const allUsers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as UserProfile));
+        setChats(allUsers.filter(u => u.role === 'passenger'));
+        setDrivers(allUsers.filter(u => u.role === 'driver'));
+      },
+      (err) => handleFirestoreError(err, OperationType.GET, 'users')
+    );
+
+    return () => {
+      unsubRides();
+      unsubLocations();
+      unsubVehicles();
+      unsubPois();
+      unsubVehicleTypes();
+      unsubSettings();
+      unsubUsers();
     };
-    fetchDrivers();
-    const interval = setInterval(fetchDrivers, 10000);
-    return () => clearInterval(interval);
-  }, []);
+  }, [profile]);
+
+  useEffect(() => {
+    if (selectedChat && currentUser) {
+      const messagesQuery = query(
+        collection(db, 'chats', selectedChat.uid, 'messages'),
+        orderBy('createdAt', 'asc')
+      );
+
+      const unsubMessages = onSnapshot(messagesQuery, (snapshot) => {
+        setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        setTimeout(() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        }, 100);
+      }, (err) => {
+        handleFirestoreError(err, OperationType.GET, `chats/${selectedChat.uid}/messages`);
+      });
+
+      return () => unsubMessages();
+    }
+  }, [selectedChat, currentUser]);
+
+  const handleTyping = async (isTyping: boolean) => {
+    if (selectedChat && currentUser) {
+      try {
+        const typingRef = doc(db, 'typing', selectedChat.uid);
+        await setDoc(typingRef, {
+          [currentUser.uid]: isTyping,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      } catch (err) {
+        // Silent error
+      }
+    }
+  };
+
+  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const onInputChange = (val: string) => {
+    setNewMessage(val);
+    handleTyping(true);
+    
+    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = setTimeout(() => {
+      handleTyping(false);
+    }, 2000);
+  };
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const addNotification = (message: string, type: 'info' | 'success' | 'warning' | 'error') => {
+    const id = Date.now();
+    setNotifications(prev => [{ id, message, type }, ...prev].slice(0, 5));
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 5000);
+  };
+
+  const updateRideStatus = async (rideId: string | number, newStatus: string, driverId?: string) => {
+    try {
+      const rideRef = doc(db, 'rides', String(rideId));
+      await updateDoc(rideRef, { 
+        status: newStatus, 
+        driverId: driverId || null,
+        updatedAt: serverTimestamp()
+      });
+      addNotification(`Ride updated to ${newStatus}`, 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
+    }
+  };
+
+  const fetchDriverHistory = async (driverId: string) => {
+    if (showHistory === driverId) {
+      setShowHistory(null);
+      setHistoryData([]);
+      return;
+    }
+    try {
+      const historyQuery = query(
+        collection(db, 'driver_locations', driverId, 'history'),
+        orderBy('timestamp', 'desc'),
+        limit(100)
+      );
+      const snapshot = await getDocs(historyQuery);
+      setHistoryData(snapshot.docs.map(doc => doc.data() as {lat: number, lng: number}));
+      setShowHistory(driverId);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, `driver_locations/${driverId}/history`);
+    }
+  };
+
+  const deleteRide = async (rideId: string | number) => {
+    try {
+      await deleteDoc(doc(db, 'rides', String(rideId)));
+      setRideToCancel(null);
+      addNotification('Ride cancelled successfully', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `rides/${rideId}`);
+    }
+  };
+
+  const sendMessage = async () => {
+    if (!newMessage.trim() || !selectedChat || !currentUser) return;
+    try {
+      await addDoc(collection(db, 'chats', selectedChat.uid, 'messages'), {
+        senderId: currentUser.uid,
+        senderName: profile?.displayName || 'Admin',
+        text: newMessage,
+        createdAt: Timestamp.now(),
+      });
+      setNewMessage('');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `chats/${selectedChat.uid}/messages`);
+    }
+  };
+
+  const handleAddVehicle = async () => {
+    try {
+      await addDoc(collection(db, 'vehicles'), {
+        ...newVehicle,
+        createdAt: serverTimestamp()
+      });
+      setIsAddingVehicle(false);
+      setNewVehicle({ make: '', model: '', type: 'Business', licensePlate: '', capacity: 4, status: 'active' });
+      addNotification('Vehicle added successfully', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'vehicles');
+    }
+  };
+
+  const handleUpdateVehicle = async () => {
+    if (!editingVehicle) return;
+    try {
+      const { id, ...data } = editingVehicle;
+      await updateDoc(doc(db, 'vehicles', id), {
+        ...data,
+        updatedAt: serverTimestamp()
+      });
+      setEditingVehicle(null);
+      addNotification('Vehicle updated successfully', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `vehicles/${editingVehicle.id}`);
+    }
+  };
+
+  const handleAddVehicleType = async () => {
+    try {
+      await addDoc(collection(db, 'vehicle_types'), {
+        ...newVehicleType,
+        createdAt: serverTimestamp()
+      });
+      setIsAddingVehicleType(false);
+      setNewVehicleType({ name: '', basePrice: 0, multiplier: 1.0, pricePerKm: 0, pricePerMin: 0, minFare: 0, hourlyRate: 0, capacity: 4, description: '' });
+      addNotification('Vehicle type added', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'vehicle_types');
+    }
+  };
+
+  const handleUpdateVehicleType = async () => {
+    if (!editingVehicleType) return;
+    try {
+      const { id, ...data } = editingVehicleType;
+      await updateDoc(doc(db, 'vehicle_types', id), {
+        ...data,
+        updatedAt: serverTimestamp()
+      });
+      setEditingVehicleType(null);
+      addNotification('Vehicle type updated', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `vehicle_types/${editingVehicleType.id}`);
+    }
+  };
+
+  const handleDeleteVehicleType = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'vehicle_types', id));
+      addNotification('Vehicle type deleted', 'warning');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `vehicle_types/${id}`);
+    }
+  };
+
+  const handleDeleteVehicle = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'vehicles', id));
+      addNotification('Vehicle deleted', 'warning');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `vehicles/${id}`);
+    }
+  };
+
   const [isAddingPOI, setIsAddingPOI] = useState(false);
   const [newPOI, setNewPOI] = useState({ name: '', price: 0, tourPrice: 0, duration: '', imageUrl: '', status: 'Active' });
   const [globalSettings, setGlobalSettings] = useState({ normal_price_per_km: 1.5, base_fare: 5.0, price_per_min: 0.5, min_fare: 15.0 });
@@ -181,423 +439,84 @@ export default function AdminDashboard() {
   const [isEditingPricing, setIsEditingPricing] = useState(false);
   const [pricingData, setPricingData] = useState<{ type: string, price: number }[]>([]);
 
-  useEffect(() => {
-    if (profile?.role !== 'admin') return;
-
-    const fetchData = async () => {
-      try {
-        const [ridesRes, locationsRes, vehiclesRes, passengersRes, poisRes, settingsRes, vehicleTypesRes] = await Promise.all([
-          fetch('/api/rides'),
-          fetch('/api/driver-locations'),
-          fetch('/api/vehicles'),
-          fetch('/api/users/passengers'),
-          fetch('/api/pois'),
-          fetch('/api/settings/pricing'),
-          fetch('/api/vehicle-types')
-        ]);
-
-        const [ridesData, locationsData, vehiclesData, passengersData, poisData, settingsData, vehicleTypesData] = await Promise.all([
-          ridesRes.json(),
-          locationsRes.json(),
-          vehiclesRes.json(),
-          passengersRes.json(),
-          poisRes.json(),
-          settingsRes.json(),
-          vehicleTypesRes.json()
-        ]);
-
-        setRides(ridesData);
-        setDriverLocations(locationsData);
-        setVehicles(vehiclesData);
-        setChats(passengersData);
-        setPois(poisData);
-        setVehicleTypes(vehicleTypesData);
-        if (!settingsData.error) setGlobalSettings(settingsData);
-        setLoading(false);
-      } catch (err) {
-        console.error('Error fetching dashboard data:', err);
-      }
-    };
-
-    fetchData();
-
-    // Socket listeners
-    socket.on('ride:requested', (ride: Ride) => {
-      setRides(prev => [ride, ...prev].slice(0, 50));
-      addNotification(`New ride request from ${ride.passengerName || 'Anonymous'}`, 'info');
-    });
-
-    socket.on('ride:updated', (updatedRide: Ride) => {
-      setRides(prev => prev.map(r => r.id === updatedRide.id ? updatedRide : r));
-      addNotification(`Ride #${String(updatedRide.id).slice(0, 8)} updated to ${updatedRide.status}`, 'info');
-    });
-
-    socket.on('ride:deleted', (id: string | number) => {
-      setRides(prev => prev.filter(r => r.id !== id));
-      addNotification(`Ride #${String(id).slice(0, 8)} removed`, 'warning');
-    });
-
-    socket.on('driver:location_updated', (location: DriverLocation) => {
-      setDriverLocations(prev => {
-        const index = prev.findIndex(l => l.driverId === location.driverId);
-        if (index !== -1) {
-          const oldLoc = prev[index];
-          if (oldLoc.status !== location.status) {
-            addNotification(`Driver ${location.driverName} is now ${location.status}`, 'info');
-          }
-          const newLocs = [...prev];
-          newLocs[index] = location;
-          return newLocs;
-        }
-        return [...prev, location];
-      });
-    });
-
-    socket.on('vehicle:added', (vehicle: Vehicle) => {
-      setVehicles(prev => [vehicle, ...prev]);
-    });
-
-    socket.on('vehicle:updated', (updatedVehicle: Vehicle) => {
-      setVehicles(prev => prev.map(v => v.id === updatedVehicle.id ? updatedVehicle : v));
-    });
-
-    socket.on('user:updated', (updatedUser: any) => {
-      if (updatedUser.role === 'driver') {
-        setDrivers(prev => prev.map(d => d.uid === updatedUser.uid ? updatedUser : d));
-      }
-    });
-
-    socket.on('vehicle:deleted', (id: string) => {
-      setVehicles(prev => prev.filter(v => v.id !== id));
-    });
-
-    socket.on('chat:typing', (data: { chatId: string, isTyping: boolean }) => {
-      setTypingUsers(prev => ({ ...prev, [data.chatId]: data.isTyping }));
-      
-      // Auto-clear typing status after 3 seconds if no new event
-      if (data.isTyping) {
-        if (typingTimeoutRef.current[data.chatId]) {
-          clearTimeout(typingTimeoutRef.current[data.chatId]);
-        }
-        typingTimeoutRef.current[data.chatId] = setTimeout(() => {
-          setTypingUsers(prev => ({ ...prev, [data.chatId]: false }));
-        }, 3000);
-      }
-    });
-
-    return () => {
-      socket.off('ride:requested');
-      socket.off('ride:updated');
-      socket.off('ride:deleted');
-      socket.off('driver:location_updated');
-      socket.off('vehicle:added');
-      socket.off('vehicle:updated');
-      socket.off('user:updated');
-      socket.off('vehicle:deleted');
-      socket.off('chat:typing');
-    };
-  }, [profile]);
-
-  useEffect(() => {
-    if (selectedChat) {
-      const fetchMessages = async () => {
-        try {
-          const res = await fetch(`/api/chats/${selectedChat.uid}/messages`);
-          const data = await res.json();
-          setMessages(data);
-          
-          // Mark messages as read
-          await fetch(`/api/chats/${selectedChat.uid}/read`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: currentUser.uid }),
-          });
-        } catch (err) {
-          console.error('Error fetching messages:', err);
-        }
-      };
-
-      fetchMessages();
-      socket.emit('join:chat', selectedChat.uid);
-
-      socket.on('chat:message', (message: any) => {
-        if (message.chat_id === selectedChat.uid) {
-          setMessages(prev => [...prev, message]);
-          
-          // Mark as read if we are the recipient
-          if (message.sender_id !== currentUser?.uid) {
-            fetch(`/api/chats/${selectedChat.uid}/read`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: currentUser.uid }),
-            });
-          }
-        }
-      });
-
-      socket.on('chat:read', (data: { chatId: string, userId: string }) => {
-        if (data.chatId === selectedChat.uid) {
-          setMessages(prev => prev.map(m => m.sender_id === data.userId ? m : { ...m, read_at: m.read_at || new Date().toISOString() }));
-        }
-      });
-
-      return () => {
-        socket.off('chat:message');
-        socket.off('chat:read');
-      };
-    }
-  }, [selectedChat, currentUser]);
-
-  const handleTyping = (isTyping: boolean) => {
-    if (selectedChat && currentUser) {
-      socket.emit('chat:typing', { chatId: selectedChat.uid, isTyping });
-    }
-  };
-
-  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const onInputChange = (val: string) => {
-    setNewMessage(val);
-    handleTyping(true);
-    
-    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-    typingTimerRef.current = setTimeout(() => {
-      handleTyping(false);
-    }, 2000);
-  };
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages]);
-
-  const addNotification = (message: string, type: 'info' | 'success' | 'warning' | 'error') => {
-    const id = Date.now();
-    setNotifications(prev => [{ id, message, type }, ...prev].slice(0, 5));
-    setTimeout(() => {
-      setNotifications(prev => prev.filter(n => n.id !== id));
-    }, 5000);
-  };
-
-  const updateRideStatus = async (rideId: string | number, newStatus: string, driverId?: string) => {
-    try {
-      await fetch(`/api/rides/${rideId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus, driverId }),
-      });
-    } catch (error) {
-      console.error('Error updating ride status:', error);
-      addNotification('Failed to update ride status', 'error');
-    }
-  };
-
-  const fetchDriverHistory = async (driverId: string) => {
-    if (showHistory === driverId) {
-      setShowHistory(null);
-      setHistoryData([]);
-      return;
-    }
-    try {
-      const res = await fetch(`/api/driver-locations/${driverId}/history`);
-      const data = await res.json();
-      setHistoryData(data);
-      setShowHistory(driverId);
-    } catch (err) {
-      console.error('Error fetching driver history:', err);
-    }
-  };
-
-  const deleteRide = async (rideId: string | number) => {
-    try {
-      await fetch(`/api/rides/${rideId}`, { method: 'DELETE' });
-      setRideToCancel(null);
-      addNotification('Ride cancelled successfully', 'success');
-    } catch (error) {
-      console.error('Error deleting ride:', error);
-      addNotification('Failed to cancel ride', 'error');
-    }
-  };
-
-  const sendMessage = async () => {
-    if (!newMessage.trim() || !selectedChat || !currentUser) return;
-    try {
-      await fetch(`/api/chats/${selectedChat.uid}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          senderId: currentUser.uid,
-          senderName: profile?.displayName || 'Admin',
-          text: newMessage,
-        }),
-      });
-      setNewMessage('');
-      handleTyping(false);
-    } catch (error) {
-      console.error('Error sending message:', error);
-    }
-  };
-
-  const handleAddVehicle = async () => {
-    try {
-      await fetch('/api/vehicles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newVehicle),
-      });
-      setIsAddingVehicle(false);
-      setNewVehicle({ make: '', model: '', type: 'Business', licensePlate: '', capacity: 4, status: 'active' });
-      addNotification('Vehicle added successfully', 'success');
-    } catch (error) {
-      console.error('Error adding vehicle:', error);
-    }
-  };
-
-  const handleUpdateVehicle = async () => {
-    if (!editingVehicle) return;
-    try {
-      await fetch(`/api/vehicles/${editingVehicle.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingVehicle),
-      });
-      setEditingVehicle(null);
-      addNotification('Vehicle updated successfully', 'success');
-    } catch (error) {
-      console.error('Error updating vehicle:', error);
-    }
-  };
-
-  const handleAddVehicleType = async () => {
-    try {
-      const res = await fetch('/api/vehicle-types', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newVehicleType),
-      });
-      const data = await res.json();
-      setVehicleTypes(prev => [...prev, data]);
-      setIsAddingVehicleType(false);
-      setNewVehicleType({ name: '', basePrice: 0, multiplier: 1.0, pricePerKm: 0, pricePerMin: 0, minFare: 0, hourlyRate: 0, capacity: 4, description: '' });
-      addNotification('Vehicle type added', 'success');
-    } catch (error) {
-      console.error('Error adding vehicle type:', error);
-    }
-  };
-
-  const handleUpdateVehicleType = async () => {
-    if (!editingVehicleType) return;
-    try {
-      const res = await fetch(`/api/vehicle-types/${editingVehicleType.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingVehicleType),
-      });
-      const data = await res.json();
-      setVehicleTypes(prev => prev.map(t => t.id === data.id ? data : t));
-      setEditingVehicleType(null);
-      addNotification('Vehicle type updated', 'success');
-    } catch (error) {
-      console.error('Error updating vehicle type:', error);
-    }
-  };
-
-  const handleDeleteVehicleType = async (id: number) => {
-    try {
-      await fetch(`/api/vehicle-types/${id}`, { method: 'DELETE' });
-      setVehicleTypes(prev => prev.filter(t => t.id !== id));
-      addNotification('Vehicle type deleted', 'warning');
-    } catch (error) {
-      console.error('Error deleting vehicle type:', error);
-    }
-  };
-
-  const handleDeleteVehicle = async (id: string) => {
-    try {
-      await fetch(`/api/vehicles/${id}`, { method: 'DELETE' });
-      addNotification('Vehicle deleted', 'warning');
-    } catch (error) {
-      console.error('Error deleting vehicle:', error);
-    }
-  };
-
   const handleRegisterDriver = async () => {
     try {
+      // In a real app, we'd use Firebase Auth to create the user
+      // For now, we'll just create the profile in Firestore
       const driverId = `driver_${Date.now()}`;
-      await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: driverId,
-          displayName: newDriver.displayName,
-          email: newDriver.email,
-          phoneNumber: newDriver.phoneNumber,
-          licenseNumber: newDriver.licenseNumber,
-          role: 'driver',
-          status: 'pending', // New drivers start as pending
-        }),
+      await setDoc(doc(db, 'users', driverId), {
+        uid: driverId,
+        displayName: newDriver.displayName,
+        email: newDriver.email,
+        phoneNumber: newDriver.phoneNumber,
+        licenseNumber: newDriver.licenseNumber,
+        role: 'driver',
+        status: 'pending',
+        createdAt: serverTimestamp()
       });
-      setNewDriver({ displayName: '', email: '', phoneNumber: '' });
+
+      // Simulated Email Notification
+      try {
+        await fetch('/api/drivers/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: newDriver.email, name: newDriver.displayName })
+        });
+      } catch (err) {
+        console.error('Failed to send simulated email:', err);
+      }
+
+      setNewDriver({ displayName: '', email: '', phoneNumber: '', licenseNumber: '' });
       addNotification('Driver registration submitted for approval', 'success');
-    } catch (error) {
-      console.error('Error registering driver:', error);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'users');
     }
   };
 
   const handleApproveDriver = async (uid: string, status: 'active' | 'rejected') => {
     try {
-      await fetch(`/api/users/${uid}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+      await updateDoc(doc(db, 'users', uid), { 
+        status,
+        updatedAt: serverTimestamp()
       });
       addNotification(`Driver ${status === 'active' ? 'approved' : 'rejected'}`, status === 'active' ? 'success' : 'warning');
-    } catch (error) {
-      console.error('Error updating driver status:', error);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
     }
   };
 
   const handleAddPOI = async () => {
     try {
-      const res = await fetch('/api/pois', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newPOI),
+      await addDoc(collection(db, 'pois'), {
+        ...newPOI,
+        createdAt: serverTimestamp()
       });
-      const data = await res.json();
-      setPois(prev => [data, ...prev]);
       setIsAddingPOI(false);
       setNewPOI({ name: '', price: 0, tourPrice: 0, duration: '', imageUrl: '', status: 'Active' });
       addNotification('POI added successfully', 'success');
     } catch (err) {
-      console.error('Error adding POI:', err);
-      addNotification('Failed to add POI', 'error');
+      handleFirestoreError(err, OperationType.WRITE, 'pois');
     }
   };
 
-  const handleDeletePOI = async (id: string | number) => {
+  const handleDeletePOI = async (id: string) => {
     try {
-      await fetch(`/api/pois/${id}`, { method: 'DELETE' });
-      setPois(prev => prev.filter(p => p.id !== id));
+      await deleteDoc(doc(db, 'pois', id));
       addNotification('POI deleted', 'warning');
-    } catch (error) {
-      console.error('Error deleting POI:', error);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `pois/${id}`);
     }
   };
 
   const handleSaveSettings = async () => {
     try {
-      const res = await fetch('/api/settings/pricing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: globalSettings }),
+      await setDoc(doc(db, 'settings', 'pricing'), {
+        value: globalSettings,
+        updatedAt: serverTimestamp()
       });
-      const data = await res.json();
-      setGlobalSettings(data);
       addNotification('Pricing settings saved', 'success');
     } catch (err) {
-      console.error('Error saving settings:', err);
-      addNotification('Failed to save settings', 'error');
+      handleFirestoreError(err, OperationType.WRITE, 'settings/pricing');
     }
   };
 
@@ -1173,10 +1092,10 @@ export default function AdminDashboard() {
                             <div className="text-sm text-gray-600 space-y-1">
                               <div className="flex justify-between items-center">
                                 <p className="flex items-center gap-2 font-medium text-pex-blue"><Users size={14} /> {ride.passengerName || 'Anonymous'}</p>
-                                {(ride.status === 'completed' || ride.status === 'in-progress') && (
+                                {(ride.status === 'completed' || ride.status === 'in_progress') && ride.estimatedDuration && (
                                   <div className="flex items-center gap-1 text-[10px] text-gray-400">
                                     <Clock size={10} />
-                                    <span>{formatDuration(ride.startedAt || ride.createdAt, ride.completedAt)}</span>
+                                    <span>Est. {Math.round(ride.estimatedDuration)} min</span>
                                   </div>
                                 )}
                               </div>
@@ -1203,11 +1122,10 @@ export default function AdminDashboard() {
                                 <span className="flex items-center gap-2"><DollarSign size={14} /> €{ride.price}</span>
                                 <div className="flex flex-col items-end">
                                   <span className="text-[10px] text-gray-400">{ride.createdAt ? new Date(ride.createdAt).toLocaleTimeString() : 'Just now'}</span>
-                                  {(ride.startedAt || ride.status === 'in_progress' || ride.status === 'completed') && (
+                                  {(ride.status === 'in_progress' || ride.status === 'completed') && ride.estimatedDuration && (
                                     <Badge variant="outline" className="mt-1 text-[10px] border-pex-gold/30 text-pex-gold bg-pex-gold/5 font-bold">
                                       <Clock size={10} className="mr-1" />
-                                      {formatDuration(ride.startedAt, ride.completedAt)}
-                                      {ride.status === 'in_progress' && ' (est.)'}
+                                      Est. {Math.round(ride.estimatedDuration)} min
                                     </Badge>
                                   )}
                                 </div>
@@ -1810,6 +1728,117 @@ export default function AdminDashboard() {
                 </CardContent>
               </Card>
             </div>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Car size={20} className="text-pex-gold" />
+                  Vehicle Types & Pricing
+                </CardTitle>
+                <Button size="sm" className="bg-pex-blue text-white" onClick={() => {
+                  const newType = { name: 'New Type', basePrice: 15, multiplier: 1, capacity: 4, description: 'Luxury Sedan', hourlyRate: 45, pricePerKm: 1.5, pricePerMin: 0.5, minFare: 15 };
+                  addDoc(collection(db, 'vehicle_types'), newType);
+                }}>
+                  <Plus size={16} className="mr-2" /> Add Vehicle Type
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {vehicleTypes.map((vt) => (
+                    <div key={vt.id} className="p-4 border rounded-xl space-y-3 relative group">
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={() => deleteDoc(doc(db, 'vehicle_types', vt.id))}
+                      >
+                        <X size={14} className="text-red-500" />
+                      </Button>
+                      <div className="space-y-1">
+                        <Label className="text-[10px] uppercase text-gray-400">Name</Label>
+                        <Input 
+                          value={vt.name} 
+                          onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { name: e.target.value })}
+                          className="h-8 text-sm font-bold"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase text-gray-400">Base Price (€)</Label>
+                          <Input 
+                            type="number"
+                            value={vt.basePrice || vt.base_price || 0} 
+                            onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { basePrice: parseFloat(e.target.value) })}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase text-gray-400">Multiplier</Label>
+                          <Input 
+                            type="number"
+                            step="0.1"
+                            value={vt.multiplier || 1} 
+                            onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { multiplier: parseFloat(e.target.value) })}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase text-gray-400">Price per KM (€)</Label>
+                          <Input 
+                            type="number"
+                            step="0.1"
+                            value={vt.pricePerKm || 0} 
+                            onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { pricePerKm: parseFloat(e.target.value) })}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase text-gray-400">Price per Min (€)</Label>
+                          <Input 
+                            type="number"
+                            step="0.1"
+                            value={vt.pricePerMin || 0} 
+                            onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { pricePerMin: parseFloat(e.target.value) })}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase text-gray-400">Min Fare (€)</Label>
+                          <Input 
+                            type="number"
+                            value={vt.minFare || 0} 
+                            onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { minFare: parseFloat(e.target.value) })}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase text-gray-400">Hourly (€/h)</Label>
+                          <Input 
+                            type="number"
+                            value={vt.hourlyRate || 0} 
+                            onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { hourlyRate: parseFloat(e.target.value) })}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase text-gray-400">Capacity</Label>
+                          <Input 
+                            type="number"
+                            value={vt.capacity || 1} 
+                            onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { capacity: parseInt(e.target.value) })}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           </div>
         )}
 

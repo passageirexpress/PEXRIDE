@@ -2,102 +2,141 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "Represents a passenger or driver in the system.",
+      "description": "User profile information",
       "type": "object",
       "properties": {
-        "uid": { "type": "string", "description": "The unique ID from Firebase Auth." },
-        "email": { "type": "string", "format": "email", "description": "The user's email address." },
-        "displayName": { "type": "string", "description": "The user's full name." },
-        "role": { "type": "string", "enum": ["passenger", "driver", "admin"], "description": "The user's role in the system." },
-        "phoneNumber": { "type": "string", "description": "The user's phone number." },
-        "photoURL": { "type": "string", "description": "The user's profile picture URL." },
-        "createdAt": { "type": "string", "format": "date-time", "description": "When the account was created." }
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["passenger", "driver", "admin"] },
+        "status": { "type": "string", "enum": ["active", "inactive", "pending"] },
+        "photoURL": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "licenseNumber": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["uid", "email", "role"]
+      "required": ["uid", "email"]
     },
     "Ride": {
       "title": "Ride",
-      "description": "Represents a ride request or booking.",
+      "description": "Ride booking information",
       "type": "object",
       "properties": {
-        "passengerId": { "type": "string", "description": "The UID of the passenger." },
-        "driverId": { "type": "string", "description": "The UID of the driver (if assigned)." },
-        "pickupLocation": { "type": "string", "description": "The pickup address." },
-        "dropoffLocation": { "type": "string", "description": "The dropoff address." },
-        "pickupCoords": { "type": "object", "description": "Latitude and longitude of pickup." },
-        "dropoffCoords": { "type": "object", "description": "Latitude and longitude of dropoff." },
-        "status": { "type": "string", "enum": ["requested", "assigned", "in-progress", "completed", "cancelled"], "description": "The current status of the ride." },
-        "rideType": { "type": "string", "description": "The type of ride (e.g., Business Class, First Class)." },
-        "price": { "type": "number", "description": "The total price of the ride." },
-        "createdAt": { "type": "string", "format": "date-time", "description": "When the ride was requested." },
-        "scheduledAt": { "type": "string", "format": "date-time", "description": "When the ride is scheduled for." }
+        "passengerId": { "type": "string" },
+        "passengerName": { "type": "string" },
+        "driverId": { "type": "string" },
+        "pickupLocation": { "type": "string" },
+        "dropoffLocation": { "type": "string" },
+        "status": { "type": "string", "enum": ["requested", "accepted", "in-progress", "completed", "cancelled"] },
+        "rideType": { "type": "string" },
+        "vehicleName": { "type": "string" },
+        "price": { "type": "number" },
+        "preferences": { "type": "object" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["passengerId", "pickupLocation", "dropoffLocation", "status", "rideType", "price"]
+      "required": ["passengerId", "pickupLocation", "dropoffLocation", "status"]
     },
-    "Vehicle": {
-      "title": "Vehicle",
-      "description": "Represents a vehicle in the fleet.",
+    "VehicleType": {
+      "title": "VehicleType",
+      "description": "Available vehicle categories and pricing",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Unique ID for the vehicle." },
-        "make": { "type": "string", "description": "The vehicle's make (e.g., Mercedes-Benz)." },
-        "model": { "type": "string", "description": "The vehicle's model (e.g., S-Class)." },
-        "year": { "type": "integer", "description": "The vehicle's year." },
-        "licensePlate": { "type": "string", "description": "The vehicle's license plate." },
-        "type": { "type": "string", "description": "The category of the vehicle (e.g., Sedan, SUV)." },
-        "capacity": { "type": "integer", "description": "The passenger capacity." },
-        "status": { "type": "string", "enum": ["active", "maintenance", "retired"], "description": "Current status of the vehicle." }
+        "name": { "type": "string" },
+        "basePrice": { "type": "number" },
+        "multiplier": { "type": "number" },
+        "pricePerKm": { "type": "number" },
+        "pricePerMin": { "type": "number" },
+        "minFare": { "type": "number" },
+        "hourlyRate": { "type": "number" },
+        "capacity": { "type": "integer" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" }
       },
-      "required": ["make", "model", "type", "licensePlate"]
+      "required": ["name"]
+    },
+    "POI": {
+      "title": "POI",
+      "description": "Points of interest for tours",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "tourPrice": { "type": "number" },
+        "duration": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["name", "price"]
     },
     "ChatMessage": {
       "title": "ChatMessage",
-      "description": "Represents a message in a support chat.",
+      "description": "Chat messages between users",
       "type": "object",
       "properties": {
-        "senderId": { "type": "string", "description": "The UID of the sender." },
-        "senderName": { "type": "string", "description": "The name of the sender." },
-        "message": { "type": "string", "description": "The message content." },
-        "timestamp": { "type": "string", "format": "date-time", "description": "When the message was sent." },
-        "chatId": { "type": "string", "description": "The unique ID for the chat session (usually passenger UID)." }
+        "chatId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "readAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["senderId", "message", "timestamp", "chatId"]
+      "required": ["chatId", "senderId", "text"]
     },
     "DriverLocation": {
       "title": "DriverLocation",
-      "description": "Represents the real-time location of a driver.",
+      "description": "Real-time driver location",
       "type": "object",
       "properties": {
-        "driverId": { "type": "string", "description": "The UID of the driver." },
-        "driverName": { "type": "string", "description": "The name of the driver." },
-        "lat": { "type": "number", "description": "Latitude." },
-        "lng": { "type": "number", "description": "Longitude." },
-        "status": { "type": "string", "enum": ["available", "busy", "offline"], "description": "The driver's current status." },
-        "updatedAt": { "type": "string", "format": "date-time", "description": "When the location was last updated." }
+        "driverId": { "type": "string" },
+        "driverName": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "status": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["driverId", "lat", "lng", "status", "updatedAt"]
+      "required": ["driverId", "lat", "lng"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Global app settings",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string" },
+        "value": { "type": "object" }
+      },
+      "required": ["key", "value"]
     }
   },
   "firestore": {
     "/users/{uid}": {
       "schema": "User",
-      "description": "User profiles stored by UID."
+      "description": "User profiles"
     },
     "/rides/{rideId}": {
       "schema": "Ride",
-      "description": "Ride bookings and requests."
+      "description": "Ride bookings"
     },
-    "/vehicles/{vehicleId}": {
-      "schema": "Vehicle",
-      "description": "Available vehicles in the fleet."
+    "/vehicle_types/{typeId}": {
+      "schema": "VehicleType",
+      "description": "Vehicle types"
+    },
+    "/pois/{poiId}": {
+      "schema": "POI",
+      "description": "Points of interest"
     },
     "/chats/{chatId}/messages/{messageId}": {
       "schema": "ChatMessage",
-      "description": "Messages within a chat session."
+      "description": "Chat messages"
     },
-    "/driverLocations/{driverId}": {
+    "/driver_locations/{driverId}": {
       "schema": "DriverLocation",
-      "description": "Real-time driver locations."
+      "description": "Driver locations"
+    },
+    "/settings/{settingId}": {
+      "schema": "Setting",
+      "description": "App settings"
     }
   }
 }

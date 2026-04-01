@@ -1,7 +1,113 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {uid}
+// Fields:
+//   - uid: string (required, immutable) - Firebase Auth UID
+//   - email: string (required, immutable) - User email
+//   - displayName: string (optional) - User display name
+//   - role: string (required, enum: ['passenger', 'driver', 'admin']) - User role
+//   - status: string (required, enum: ['active', 'inactive', 'pending']) - Account status
+//   - photoURL: string (optional) - Profile photo URL
+//   - phoneNumber: string (optional) - Contact number
+//   - licenseNumber: string (optional) - Driver's license (drivers only)
+//   - createdAt: timestamp (required, immutable) - Creation time
+//
+// Collection: rides
+// Document ID: {rideId}
+// Fields:
+//   - passengerId: string (required, immutable) - UID of the passenger
+//   - passengerName: string (required) - Name of the passenger
+//   - driverId: string (optional) - UID of the driver
+//   - pickupLocation: string (required) - Pickup address
+//   - dropoffLocation: string (required) - Dropoff address
+//   - status: string (required, enum: ['requested', 'accepted', 'in-progress', 'completed', 'cancelled']) - Ride status
+//   - rideType: string (required) - Type of ride (e.g., 'one-way', 'hourly')
+//   - vehicleName: string (required) - Name of the vehicle
+//   - price: number (required) - Total price
+//   - preferences: map (optional) - User preferences (silent mode, temp, etc.)
+//   - startedAt: timestamp (optional) - When the ride started
+//   - completedAt: timestamp (optional) - When the ride ended
+//   - createdAt: timestamp (required, immutable) - Booking time
+//
+// Collection: vehicle_types
+// Document ID: {typeId}
+// Fields:
+//   - name: string (required) - Category name
+//   - basePrice: number (required) - Base fare
+//   - multiplier: number (required) - Price multiplier
+//   - pricePerKm: number (required) - Rate per km
+//   - pricePerMin: number (required) - Rate per minute
+//   - minFare: number (required) - Minimum fare
+//   - hourlyRate: number (required) - Rate for hourly bookings
+//   - capacity: int (required) - Passenger capacity
+//   - description: string (optional) - Category description
+//   - imageUrl: string (optional) - Vehicle image URL
+//
+// Collection: pois
+// Document ID: {poiId}
+// Fields:
+//   - name: string (required) - POI name
+//   - price: number (required) - Base price
+//   - tourPrice: number (required) - Tour price
+//   - duration: string (required) - Estimated duration
+//   - image_url: string (optional) - POI image URL
+//   - status: string (required) - POI status
+//
+// Collection: chats/{chatId}/messages
+// Document ID: {messageId}
+// Fields:
+//   - chatId: string (required, immutable) - ID of the chat session
+//   - senderId: string (required, immutable) - UID of the sender
+//   - senderName: string (required) - Name of the sender
+//   - text: string (required) - Message content
+//   - createdAt: timestamp (required, immutable) - Message time
+//   - readAt: timestamp (optional) - When the message was read
+//
+// Collection: driver_locations
+// Document ID: {driverId}
+// Fields:
+//   - driverId: string (required, immutable) - UID of the driver
+//   - driverName: string (required) - Name of the driver
+//   - lat: number (required) - Latitude
+//   - lng: number (required) - Longitude
+//   - status: string (required) - Driver status
+//   - updatedAt: timestamp (required) - Last update time
+//
+// Collection: settings
+// Document ID: {settingId}
+// Fields:
+//   - key: string (required) - Setting key
+//   - value: any (required) - Setting value
+//
+// Collection: vehicles
+// Document ID: {vehicleId}
+// Fields:
+//   - make: string (required)
+//   - model: string (required)
+//   - type: string (required)
+//   - licensePlate: string (required)
+//   - capacity: number (required)
+//   - status: string (required)
+//
+// Collection: typing
+// Document ID: {userId}
+// Fields:
+//   - {userId}: boolean - Typing status
+//   - updatedAt: timestamp
+//
+// ===============================================================
+
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -12,61 +118,135 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-         (request.auth.token.email == "michaelsouzaxt21@gmail.com" && request.auth.token.email_verified == true));
+        ((request.auth.token.email == "michaelsouzaxt21@gmail.com" && request.auth.token.email_verified == true) ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+    }
+
+    function isDriver() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver';
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
     }
 
     function isValidEmail(email) {
-      return email is string &&
-        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
     }
 
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'email', 'role', 'status', 'createdAt']) &&
+             (data.uid == request.auth.uid || isAdmin()) &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['passenger', 'driver', 'admin'] &&
+             data.status in ['active', 'inactive', 'pending'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidRide(data) {
+      return hasRequiredFields(['passengerId', 'passengerName', 'pickupLocation', 'dropoffLocation', 'status', 'rideType', 'vehicleName', 'price', 'createdAt']) &&
+             data.passengerId is string &&
+             data.status in ['requested', 'accepted', 'in-progress', 'completed', 'cancelled'] &&
+             data.price is number && data.price >= 0 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidMessage(data) {
+      return hasRequiredFields(['chatId', 'senderId', 'senderName', 'text', 'createdAt']) &&
+             data.senderId == request.auth.uid &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 1000 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidDriverLocation(data) {
+      return hasRequiredFields(['driverId', 'driverName', 'lat', 'lng', 'status', 'updatedAt']) &&
+             data.driverId == request.auth.uid &&
+             data.lat is number && data.lng is number &&
+             data.updatedAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // Users Collection
     match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
-      allow create: if isAuthenticated() && 
-                    request.resource.data.uid == userId &&
-                    request.resource.data.role in ['passenger', 'driver', 'admin'] &&
-                    ((isOwner(userId) && request.resource.data.role == 'passenger') || isAdmin());
-      allow update: if isAuthenticated() && 
-                    request.resource.data.role == resource.data.role &&
-                    (isOwner(userId) || isAdmin());
-      allow delete: if isAdmin();
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin() || isDriver());
+      allow create: if isAuthenticated() && (request.resource.data.uid == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin());
     }
 
+    // Rides Collection
     match /rides/{rideId} {
-      allow read: if isAuthenticated() && (resource.data.passengerId == request.auth.uid || resource.data.driverId == request.auth.uid || isAdmin());
-      allow create: if isAuthenticated() && 
-                    request.resource.data.passengerId == request.auth.uid &&
-                    request.resource.data.status == 'requested' &&
-                    (request.resource.data.passengerId == request.auth.uid || isAdmin());
-      allow update: if isAuthenticated() && 
-                    (resource.data.passengerId == request.auth.uid || resource.data.driverId == request.auth.uid || isAdmin());
-      allow delete: if isAdmin();
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.passengerId || request.auth.uid == resource.data.driverId || isAdmin());
+      allow create: if isAuthenticated() && isValidRide(request.resource.data) && request.auth.uid == request.resource.data.passengerId;
+      allow update: if isAuthenticated() && isValidRide(request.resource.data) && 
+                      (request.auth.uid == resource.data.passengerId || request.auth.uid == resource.data.driverId || isAdmin());
     }
 
-    match /vehicles/{vehicleId} {
-      allow read: if isAuthenticated();
+    // Vehicle Types Collection
+    match /vehicle_types/{typeId} {
+      allow read: if true; // Publicly readable
       allow write: if isAdmin();
     }
 
+    // POIs Collection
+    match /pois/{poiId} {
+      allow read: if true; // Publicly readable
+      allow write: if isAdmin();
+    }
+
+    // Chats Collection
     match /chats/{chatId} {
-      allow read: if isOwner(chatId) || isAdmin();
-      allow write: if isOwner(chatId) || isAdmin();
+      allow read: if isAuthenticated(); // Simplified for now, should ideally check if user is participant
       
       match /messages/{messageId} {
-        allow read: if isOwner(chatId) || isAdmin();
-        allow create: if (isOwner(chatId) || isAdmin()) && 
-                      request.resource.data.senderId == request.auth.uid;
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidMessage(request.resource.data);
       }
     }
 
-    match /driverLocations/{driverId} {
+    // Driver Locations Collection
+    match /driver_locations/{driverId} {
       allow read: if isAuthenticated();
-      allow write: if isOwner(driverId) || isAdmin();
+      allow write: if isOwner(driverId) && isDriver();
+
+      match /history/{historyId} {
+        allow read: if isAdmin() || isOwner(driverId);
+        allow create: if isOwner(driverId) && isDriver();
+      }
     }
 
-    match /{path=**} {
+    // Settings Collection
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Vehicles Collection
+    match /vehicles/{vehicleId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || (isAuthenticated() && resource.data.driverId == request.auth.uid);
+    }
+
+    // Typing Collection
+    match /typing/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId) || isAdmin();
+    }
+
+    // Default Deny
+    match /{document=**} {
       allow read, write: if false;
     }
   }

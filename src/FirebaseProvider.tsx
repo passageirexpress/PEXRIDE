@@ -1,7 +1,58 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, User, signInWithPopup, GoogleAuthProvider, OAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot, Timestamp } from 'firebase/firestore';
 import { auth, db } from './firebase';
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 interface FirebaseContextType {
   user: User | null;
@@ -22,53 +73,45 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        // Fetch or create user profile in Firestore (keep for now as fallback/auth)
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        let userProfile;
-        if (userDoc.exists()) {
-          userProfile = userDoc.data();
-        } else {
-          // Create default profile for new user
-          userProfile = {
-            uid: currentUser.uid,
-            email: currentUser.email,
-            displayName: currentUser.displayName,
-            role: 'passenger', // Default role
-            photoURL: currentUser.photoURL,
-            createdAt: new Date().toISOString(),
-          };
-          await setDoc(doc(db, 'users', currentUser.uid), userProfile);
-        }
+        const userDocRef = doc(db, 'users', currentUser.uid);
         
-        // Sync with Postgres and get the authoritative profile (with role)
-        try {
-          const res = await fetch('/api/users', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(userProfile),
-          });
-          if (res.ok) {
-            const authoritativeProfile = await res.json();
-            setProfile(authoritativeProfile);
-            
-            // Optionally update Firestore to keep it in sync
-            if (authoritativeProfile.role !== userProfile.role) {
-              await setDoc(doc(db, 'users', currentUser.uid), authoritativeProfile, { merge: true });
-            }
+        // Use onSnapshot for real-time profile updates
+        const unsubProfile = onSnapshot(userDocRef, async (docSnap) => {
+          if (docSnap.exists()) {
+            setProfile(docSnap.data());
           } else {
-            setProfile(userProfile);
+            // Create default profile for new user
+            const isAdminEmail = currentUser.email?.toLowerCase() === 'michaelsouzaxt21@gmail.com';
+            const userProfile = {
+              uid: currentUser.uid,
+              email: currentUser.email,
+              displayName: currentUser.displayName,
+              role: isAdminEmail ? 'admin' : 'passenger',
+              status: 'active',
+              photoURL: currentUser.photoURL,
+              createdAt: Timestamp.now(),
+            };
+            try {
+              await setDoc(userDocRef, userProfile);
+              setProfile(userProfile);
+            } catch (err) {
+              handleFirestoreError(err, OperationType.WRITE, `users/${currentUser.uid}`);
+            }
           }
-        } catch (err) {
-          console.error('Error syncing with Postgres:', err);
-          setProfile(userProfile);
-        }
+          setLoading(false);
+        }, (err) => {
+          handleFirestoreError(err, OperationType.GET, `users/${currentUser.uid}`);
+          setLoading(false);
+        });
+
+        return () => unsubProfile();
       } else {
         setProfile(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => unsubscribe();

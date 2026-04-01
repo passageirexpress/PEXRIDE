@@ -18,9 +18,11 @@ import { MapPin, Clock, Star, Music, Thermometer, VolumeX, Crown, Navigation, Ch
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { motion, AnimatePresence } from 'motion/react';
-import { useFirebase } from '../FirebaseProvider';
-import { socket } from '../lib/socket';
+import { useFirebase, handleFirestoreError, OperationType } from '../FirebaseProvider';
+import { db } from '../firebase';
+import { collection, query, where, onSnapshot, orderBy, addDoc, Timestamp, doc, updateDoc, getDocs, limit, setDoc, serverTimestamp } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
+import { ADDRESS_COORDS, ADDRESS_SUGGESTIONS } from '../constants';
 
 export default function PassengerApp() {
   const { user } = useFirebase();
@@ -34,7 +36,11 @@ export default function PassengerApp() {
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [bookingStatus, setBookingStatus] = useState<'idle' | 'booking' | 'success' | 'error'>('idle');
   const [pois, setPois] = useState<any[]>([]);
-  const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
+  const [vehicleTypes, setVehicleTypes] = useState<any[]>([
+    { id: 'business', name: 'Business Class', description: 'Mercedes E-Class, BMW 5 Series', capacity: 3, basePrice: 45, multiplier: 1, pricePerKm: 2.2, pricePerMin: 0.6, minFare: 50, hourlyRate: 65 },
+    { id: 'business_van', name: 'Business Van/SUV', description: 'Mercedes V-Class, Cadillac Escalade', capacity: 5, basePrice: 65, multiplier: 1.5, pricePerKm: 3.0, pricePerMin: 0.8, minFare: 75, hourlyRate: 85 },
+    { id: 'first_class', name: 'First Class', description: 'Mercedes S-Class, BMW 7 Series', capacity: 3, basePrice: 90, multiplier: 2, pricePerKm: 4.0, pricePerMin: 1.2, minFare: 100, hourlyRate: 120 }
+  ]);
   const [selectedPois, setSelectedPois] = useState<string[]>([]);
   const [globalSettings, setGlobalSettings] = useState({ normal_price_per_km: 1.5, base_fare: 5.0, price_per_min: 0.5, min_fare: 15.0 });
   const [rideHistory, setRideHistory] = useState<any[]>([]);
@@ -73,9 +79,79 @@ export default function PassengerApp() {
   const [widgetTime, setWidgetTime] = useState('');
   const [widgetTripType, setWidgetTripType] = useState('one-way');
   const [widgetDuration, setWidgetDuration] = useState('4');
+  const [widgetPickupSuggestions, setWidgetPickupSuggestions] = useState<any[]>([]);
+  const [widgetDropoffSuggestions, setWidgetDropoffSuggestions] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchPickup = async () => {
+      if (widgetPickup.length < 2) {
+        setWidgetPickupSuggestions([]);
+        return;
+      }
+      
+      const hardcoded = ADDRESS_SUGGESTIONS
+        .filter(s => s.toLowerCase().includes(widgetPickup.toLowerCase()))
+        .map(s => ({ display_name: s, isHardcoded: true }));
+
+      if (widgetPickup.length > 2) {
+        try {
+          const res = await fetch(`/api/maps/autocomplete?input=${encodeURIComponent(widgetPickup)}`);
+          if (!res.ok) throw new Error(`Server error: ${res.status}`);
+          const data = await res.json();
+          const suggestions = (data.predictions || []).map((p: any) => ({
+            display_name: p.description,
+            place_id: p.place_id,
+            isGoogle: true
+          }));
+          const filteredHardcoded = hardcoded.filter(h => !suggestions.some((s: any) => s.display_name.includes(h.display_name)));
+          setWidgetPickupSuggestions([...filteredHardcoded, ...suggestions]);
+        } catch (err) {
+          setWidgetPickupSuggestions(hardcoded);
+        }
+      } else {
+        setWidgetPickupSuggestions(hardcoded);
+      }
+    };
+    const timeoutId = setTimeout(fetchPickup, 500);
+    return () => clearTimeout(timeoutId);
+  }, [widgetPickup]);
+
+  useEffect(() => {
+    const fetchDropoff = async () => {
+      if (widgetDropoff.length < 2) {
+        setWidgetDropoffSuggestions([]);
+        return;
+      }
+      
+      const hardcoded = ADDRESS_SUGGESTIONS
+        .filter(s => s.toLowerCase().includes(widgetDropoff.toLowerCase()))
+        .map(s => ({ display_name: s, isHardcoded: true }));
+
+      if (widgetDropoff.length > 2) {
+        try {
+          const res = await fetch(`/api/maps/autocomplete?input=${encodeURIComponent(widgetDropoff)}`);
+          if (!res.ok) throw new Error(`Server error: ${res.status}`);
+          const data = await res.json();
+          const suggestions = (data.predictions || []).map((p: any) => ({
+            display_name: p.description,
+            place_id: p.place_id,
+            isGoogle: true
+          }));
+          const filteredHardcoded = hardcoded.filter(h => !suggestions.some((s: any) => s.display_name.includes(h.display_name)));
+          setWidgetDropoffSuggestions([...filteredHardcoded, ...suggestions]);
+        } catch (err) {
+          setWidgetDropoffSuggestions(hardcoded);
+        }
+      } else {
+        setWidgetDropoffSuggestions(hardcoded);
+      }
+    };
+    const timeoutId = setTimeout(fetchDropoff, 500);
+    return () => clearTimeout(timeoutId);
+  }, [widgetDropoff]);
 
   const handleSearchRides = () => {
-    navigate('/book', {
+    navigate('/booking', {
       state: {
         pickup: widgetPickup,
         dropoff: widgetDropoff,
@@ -90,11 +166,10 @@ export default function PassengerApp() {
   const fetchPois = async () => {
     setIsRefreshingPois(true);
     try {
-      const res = await fetch('/api/pois');
-      const data = await res.json();
-      setPois(data.filter((p: any) => p.status === 'Active'));
+      const snapshot = await getDocs(query(collection(db, 'pois'), where('status', '==', 'Active')));
+      setPois(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     } catch (err) {
-      console.error('Error fetching POIs:', err);
+      handleFirestoreError(err, OperationType.GET, 'pois');
     } finally {
       setIsRefreshingPois(false);
     }
@@ -116,11 +191,12 @@ export default function PassengerApp() {
     name: vt.name === 'Business' ? 'Mercedes S-Class' : vt.name === 'SUV' ? 'Range Rover' : 'Mercedes V-Class',
     type: vt.name,
     capacity: vt.capacity || '3 Pax • 2 Bags',
-    basePrice: vt.basePrice,
-    multiplier: vt.multiplier,
-    pricePerKm: vt.pricePerKm,
-    pricePerMin: vt.pricePerMin,
-    minFare: vt.minFare,
+    basePrice: vt.basePrice || vt.base_price || 0,
+    multiplier: vt.multiplier || 1,
+    pricePerKm: vt.pricePerKm || 0,
+    pricePerMin: vt.pricePerMin || 0,
+    minFare: vt.minFare || 0,
+    hourlyRate: vt.hourlyRate || 0,
     rating: 4.8 + (Math.random() * 0.2),
     image: MOCK_IMAGES[i % MOCK_IMAGES.length],
     driver: MOCK_DRIVERS[i % MOCK_DRIVERS.length]
@@ -143,98 +219,77 @@ export default function PassengerApp() {
   useEffect(() => {
     if (!user) return;
 
-    // Join chat room
-    socket.emit('join:chat', user.uid);
+    // Fetch messages from Firestore
+    const messagesQuery = query(
+      collection(db, 'chats', user.uid, 'messages'),
+      orderBy('createdAt', 'asc')
+    );
 
-    // Fetch messages
-    fetch(`/api/chats/${user.uid}/messages`)
-      .then(res => res.json())
-      .then(data => {
-        setMessages(data);
-        setTimeout(() => {
-          if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-          }
-        }, 100);
-      })
-      .catch(err => console.error('Error fetching messages:', err));
-
-    // Listen for new messages
-    const handleNewMessage = (message: any) => {
-      if (message.chat_id === user.uid) {
-        setMessages(prev => [...prev, message]);
-        
-        // Mark as read if we are the recipient
-        if (message.sender_id !== user.uid) {
-          fetch(`/api/chats/${user.uid}/read`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId: user.uid }),
-          });
+    const unsubMessages = onSnapshot(messagesQuery, (snapshot) => {
+      const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setMessages(msgs);
+      setTimeout(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
-
-        setTimeout(() => {
-          if (scrollRef.current) {
-            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-          }
-        }, 100);
-      }
-    };
-
-    const handleChatRead = (data: { chatId: string, userId: string }) => {
-      if (data.chatId === user.uid) {
-        setMessages(prev => prev.map(m => m.sender_id === data.userId ? m : { ...m, read_at: m.read_at || new Date().toISOString() }));
-      }
-    };
-
-    socket.on('chat:message', handleNewMessage);
-    socket.on('chat:read', handleChatRead);
-    
-    socket.on('chat:typing', (data: { chatId: string, isTyping: boolean }) => {
-      if (data.chatId === user?.uid) {
-        setIsTyping(data.isTyping);
-        
-        // Auto-clear typing status after 3 seconds if no new event
-        if (data.isTyping) {
-          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-          typingTimeoutRef.current = setTimeout(() => {
-            setIsTyping(false);
-          }, 3000);
-        }
-      }
+      }, 100);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, `chats/${user.uid}/messages`);
     });
 
-    // Fetch POIs
-    fetch('/api/pois')
-      .then(res => res.json())
-      .then(data => setPois(data.filter((p: any) => p.status === 'Active')))
-      .catch(err => console.error('Error fetching POIs:', err));
+    // Fetch POIs from Firestore
+    const poisQuery = query(collection(db, 'pois'), where('status', '==', 'Active'));
+    const unsubPois = onSnapshot(poisQuery, (snapshot) => {
+      setPois(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'pois');
+    });
 
-    // Fetch Global Settings
-    fetch('/api/settings/pricing')
-      .then(res => res.json())
-      .then(data => {
-        if (!data.error) setGlobalSettings(data);
-      })
-      .catch(err => console.error('Error fetching settings:', err));
+    // Fetch Global Settings from Firestore
+    const settingsQuery = collection(db, 'settings');
+    const unsubSettings = onSnapshot(settingsQuery, (snapshot) => {
+      snapshot.docs.forEach(doc => {
+        if (doc.id === 'pricing') {
+          setGlobalSettings(doc.data().value);
+        }
+      });
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'settings');
+    });
 
-    // Fetch Vehicle Types
-    fetch('/api/vehicle-types')
-      .then(res => res.json())
-      .then(data => setVehicleTypes(data))
-      .catch(err => console.error('Error fetching vehicle types:', err));
+    // Fetch Vehicle Types from Firestore
+    const vehicleTypesQuery = collection(db, 'vehicle_types');
+    const unsubVehicleTypes = onSnapshot(vehicleTypesQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        setVehicleTypes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'vehicle_types');
+    });
 
-    // Fetch Ride History
-    if (user) {
-      fetch(`/api/rides?passengerId=${user.uid}`)
-        .then(res => res.json())
-        .then(data => setRideHistory(data))
-        .catch(err => console.error('Error fetching ride history:', err));
-    }
+    // Fetch Ride History from Firestore
+    const rideHistoryQuery = query(
+      collection(db, 'rides'),
+      where('passengerId', '==', user.uid)
+    );
+    const unsubRideHistory = onSnapshot(rideHistoryQuery, (snapshot) => {
+      const rides = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      rides.sort((a: any, b: any) => {
+        const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(0);
+        const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(0);
+        return dateB.getTime() - dateA.getTime();
+      });
+      setRideHistory(rides);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'rides');
+    });
 
     return () => {
-      socket.off('chat:message', handleNewMessage);
-      socket.off('chat:read', handleChatRead);
+      unsubMessages();
+      unsubPois();
+      unsubSettings();
+      unsubVehicleTypes();
+      unsubRideHistory();
     };
   }, [user, isChatOpen]);
 
@@ -249,25 +304,29 @@ export default function PassengerApp() {
     if (!user || !newMessage.trim()) return;
 
     try {
-      await fetch(`/api/chats/${user.uid}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          senderId: user.uid,
-          senderName: user.displayName,
-          text: newMessage,
-        }),
+      await addDoc(collection(db, 'chats', user.uid, 'messages'), {
+        senderId: user.uid,
+        senderName: user.displayName || 'Passenger',
+        text: newMessage,
+        createdAt: Timestamp.now(),
       });
       setNewMessage('');
-      handleTyping(false);
-    } catch (error) {
-      console.error('Error sending message:', error);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `chats/${user.uid}/messages`);
     }
   };
 
-  const handleTyping = (typing: boolean) => {
+  const handleTyping = async (typing: boolean) => {
     if (user) {
-      socket.emit('chat:typing', { chatId: user.uid, isTyping: typing });
+      try {
+        const typingRef = doc(db, 'typing', user.uid);
+        await setDoc(typingRef, {
+          [user.uid]: typing,
+          updatedAt: serverTimestamp()
+        }, { merge: true });
+      } catch (err) {
+        // Silent error for typing
+      }
     }
   };
 
@@ -318,9 +377,8 @@ export default function PassengerApp() {
       
       console.log('Falling back to OSRM...');
       // Fallback to OSRM
-      const osrmRes = await fetch(`https://router.project-osrm.org/route/v1/driving/${pCoords.lon},${pCoords.lat};${dCoords.lon},${dCoords.lat}?overview=false`, {
-        headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-      });
+      const osrmRes = await fetch(`/api/osrm/route?coordinates=${pCoords.lon},${pCoords.lat};${dCoords.lon},${dCoords.lat}`);
+      if (!osrmRes.ok) throw new Error(`OSRM error: ${osrmRes.status}`);
       const osrmData = await osrmRes.json();
       console.log('OSRM response:', osrmData);
       if (osrmData.routes && osrmData.routes[0]) {
@@ -417,9 +475,8 @@ export default function PassengerApp() {
             setPickupCoords(currentPickupCoords);
           } else {
             // Fallback to Nominatim
-            const nomRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(pickup)}&limit=1`, {
-              headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-            });
+            const nomRes = await fetch(`/api/nominatim/search?q=${encodeURIComponent(pickup)}`);
+            if (!nomRes.ok) throw new Error(`Nominatim error: ${nomRes.status}`);
             const nomData = await nomRes.json();
             if (nomData && nomData[0]) {
               currentPickupCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
@@ -446,9 +503,8 @@ export default function PassengerApp() {
             setDropoffCoords(currentDropoffCoords);
           } else {
             // Fallback to Nominatim
-            const nomRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dropoff)}&limit=1`, {
-              headers: { 'User-Agent': 'PassageiroExpressLuxury/1.0' }
-            });
+            const nomRes = await fetch(`/api/nominatim/search?q=${encodeURIComponent(dropoff)}`);
+            if (!nomRes.ok) throw new Error(`Nominatim error: ${nomRes.status}`);
             const nomData = await nomRes.json();
             if (nomData && nomData[0]) {
               currentDropoffCoords = { lat: parseFloat(nomData[0].lat), lon: parseFloat(nomData[0].lon) };
@@ -493,25 +549,23 @@ export default function PassengerApp() {
       const finalBaseRidePrice = calculateFinalBaseFare();
       const finalTotalPrice = Math.round((finalBaseRidePrice + poiCost) * 1.23);
 
-      await fetch('/api/rides', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          passengerId: user.uid,
-          passengerName: user.displayName,
-          pickupLocation: pickup,
-          dropoffLocation: dropoff,
-          rideType: selectedVehicle.type,
-          vehicleName: selectedVehicle.name,
-          price: finalTotalPrice,
-          preferences: {
-            silentMode,
-            temperature: temperature[0],
-            playlist: selectedPlaylist,
-            selectedPois,
-            tripType
-          }
-        }),
+      await addDoc(collection(db, 'rides'), {
+        passengerId: user.uid,
+        passengerName: user.displayName,
+        pickupLocation: pickup,
+        dropoffLocation: dropoff,
+        rideType: selectedVehicle.type,
+        vehicleName: selectedVehicle.name,
+        price: finalTotalPrice,
+        preferences: {
+          silentMode,
+          temperature: temperature[0],
+          playlist: selectedPlaylist,
+          selectedPois,
+          tripType
+        },
+        status: 'requested',
+        createdAt: serverTimestamp(),
       });
       setBookingStatus('success');
       setIsBookingModalOpen(false);
@@ -566,6 +620,7 @@ export default function PassengerApp() {
       if (pickup.length > 2) {
         try {
           const res = await fetch(`/api/maps/autocomplete?input=${encodeURIComponent(pickup)}`);
+          if (!res.ok) throw new Error(`Server error: ${res.status}`);
           const data = await res.json();
           const suggestions = (data.predictions || []).map((p: any) => ({
             display_name: p.description,
@@ -589,6 +644,7 @@ export default function PassengerApp() {
       if (dropoff.length > 2) {
         try {
           const res = await fetch(`/api/maps/autocomplete?input=${encodeURIComponent(dropoff)}`);
+          if (!res.ok) throw new Error(`Server error: ${res.status}`);
           const data = await res.json();
           const suggestions = (data.predictions || []).map((p: any) => ({
             display_name: p.description,
@@ -797,7 +853,7 @@ export default function PassengerApp() {
         <div className="absolute inset-0 z-0">
           <motion.div 
             initial={{ scale: 1.05, opacity: 0 }}
-            animate={{ scale: 1, opacity: 0.6 }}
+            animate={{ scale: 1, opacity: 0.8 }}
             transition={{ duration: 1.5 }}
             className="w-full h-full"
           >
@@ -808,7 +864,7 @@ export default function PassengerApp() {
               referrerPolicy="no-referrer"
             />
           </motion.div>
-          <div className="absolute inset-0 bg-gradient-to-t from-pex-blue via-pex-blue/40 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-pex-blue/80 via-pex-blue/20 to-transparent" />
         </div>
 
         <div className="relative z-10 max-w-7xl mx-auto px-6 w-full grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
@@ -839,13 +895,13 @@ export default function PassengerApp() {
             <Card className="bg-white rounded-2xl shadow-2xl border-0 overflow-hidden">
               <div className="flex border-b border-gray-100">
                 <button 
-                  className={`flex-1 py-4 text-sm font-bold transition-colors ${widgetTripType === 'one-way' ? 'text-pex-blue border-b-2 border-pex-gold' : 'text-gray-400 hover:text-gray-600'}`}
+                  className={`flex-1 py-4 text-sm font-bold transition-colors ${widgetTripType === 'one-way' ? 'text-pex-blue border-b-2 border-pex-gold' : 'text-gray-500 hover:text-gray-700'}`}
                   onClick={() => setWidgetTripType('one-way')}
                 >
                   ONE WAY
                 </button>
                 <button 
-                  className={`flex-1 py-4 text-sm font-bold transition-colors ${widgetTripType === 'hourly' ? 'text-pex-blue border-b-2 border-pex-gold' : 'text-gray-400 hover:text-gray-600'}`}
+                  className={`flex-1 py-4 text-sm font-bold transition-colors ${widgetTripType === 'hourly' ? 'text-pex-blue border-b-2 border-pex-gold' : 'text-gray-500 hover:text-gray-700'}`}
                   onClick={() => setWidgetTripType('hourly')}
                 >
                   BY THE HOUR
@@ -861,12 +917,37 @@ export default function PassengerApp() {
                     <div className="w-7 h-7 rounded-full bg-pex-blue/10 flex items-center justify-center flex-shrink-0">
                       <div className="w-2 h-2 rounded-full bg-pex-blue"></div>
                     </div>
-                    <Input 
-                      placeholder="Pick-up location" 
-                      className="h-12 bg-gray-50 border-transparent focus-visible:ring-pex-gold focus-visible:bg-white text-base"
-                      value={widgetPickup}
-                      onChange={(e) => setWidgetPickup(e.target.value)}
-                    />
+                    <div className="flex-1 relative">
+                      <Input 
+                        placeholder="Pick-up location" 
+                        className="h-12 bg-white border-gray-200 focus-visible:ring-pex-gold text-gray-900 text-base"
+                        value={widgetPickup}
+                        onChange={(e) => setWidgetPickup(e.target.value)}
+                      />
+                      <AnimatePresence>
+                        {widgetPickupSuggestions.length > 0 && (
+                          <motion.div 
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            className="absolute z-[100] w-full mt-1 bg-white border border-gray-100 rounded-lg shadow-xl overflow-hidden"
+                          >
+                            {widgetPickupSuggestions.map((s, i) => (
+                              <button 
+                                key={i}
+                                className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-none text-gray-900"
+                                onClick={() => {
+                                  setWidgetPickup(s.display_name);
+                                  setWidgetPickupSuggestions([]);
+                                }}
+                              >
+                                {s.display_name}
+                              </button>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
                   </div>
 
                   {widgetTripType === 'one-way' ? (
@@ -874,12 +955,37 @@ export default function PassengerApp() {
                       <div className="w-7 h-7 rounded-full bg-pex-gold/10 flex items-center justify-center flex-shrink-0">
                         <MapPin size={14} className="text-pex-gold" />
                       </div>
-                      <Input 
-                        placeholder="Drop-off location" 
-                        className="h-12 bg-gray-50 border-transparent focus-visible:ring-pex-gold focus-visible:bg-white text-base"
-                        value={widgetDropoff}
-                        onChange={(e) => setWidgetDropoff(e.target.value)}
-                      />
+                      <div className="flex-1 relative">
+                        <Input 
+                          placeholder="Drop-off location" 
+                          className="h-12 bg-white border-gray-200 focus-visible:ring-pex-gold text-gray-900 text-base"
+                          value={widgetDropoff}
+                          onChange={(e) => setWidgetDropoff(e.target.value)}
+                        />
+                        <AnimatePresence>
+                          {widgetDropoffSuggestions.length > 0 && (
+                            <motion.div 
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -10 }}
+                              className="absolute z-[100] w-full mt-1 bg-white border border-gray-100 rounded-lg shadow-xl overflow-hidden"
+                            >
+                              {widgetDropoffSuggestions.map((s, i) => (
+                                <button 
+                                  key={i}
+                                  className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-none text-gray-900"
+                                  onClick={() => {
+                                    setWidgetDropoff(s.display_name);
+                                    setWidgetDropoffSuggestions([]);
+                                  }}
+                                >
+                                  {s.display_name}
+                                </button>
+                              ))}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
                     </div>
                   ) : (
                     <div className="relative z-10 flex items-center gap-3">
@@ -887,7 +993,7 @@ export default function PassengerApp() {
                         <Clock size={14} className="text-pex-gold" />
                       </div>
                       <select 
-                        className="flex h-12 w-full items-center justify-between rounded-md border border-transparent bg-gray-50 px-3 py-2 text-base ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-pex-gold focus:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex h-12 w-full items-center justify-between rounded-md border border-gray-200 bg-white px-3 py-2 text-base text-gray-900 ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-pex-gold disabled:cursor-not-allowed disabled:opacity-50"
                         value={widgetDuration}
                         onChange={(e) => setWidgetDuration(e.target.value)}
                       >
@@ -901,19 +1007,19 @@ export default function PassengerApp() {
 
                 <div className="grid grid-cols-2 gap-4 pt-2">
                   <div className="space-y-1.5">
-                    <Label className="text-xs text-gray-500 font-bold uppercase tracking-wider">Date</Label>
+                    <Label className="text-xs text-gray-500 font-semibold uppercase tracking-wider">Date</Label>
                     <Input 
                       type="date" 
-                      className="h-12 bg-gray-50 border-transparent focus-visible:ring-pex-gold"
+                      className="h-12 bg-white border-gray-200 focus-visible:ring-pex-gold text-gray-900"
                       value={widgetDate}
                       onChange={(e) => setWidgetDate(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs text-gray-500 font-bold uppercase tracking-wider">Time</Label>
+                    <Label className="text-xs text-gray-500 font-semibold uppercase tracking-wider">Time</Label>
                     <Input 
                       type="time" 
-                      className="h-12 bg-gray-50 border-transparent focus-visible:ring-pex-gold"
+                      className="h-12 bg-white border-gray-200 focus-visible:ring-pex-gold text-gray-900"
                       value={widgetTime}
                       onChange={(e) => setWidgetTime(e.target.value)}
                     />

@@ -3,11 +3,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useFirebase } from '../FirebaseProvider';
+import { useFirebase, handleFirestoreError, OperationType } from '../FirebaseProvider';
+import { db } from '../firebase';
+import { collection, query, where, onSnapshot, doc, updateDoc, setDoc, serverTimestamp, orderBy, limit, addDoc } from 'firebase/firestore';
 import { Map, Users, DollarSign, MessageSquare, CheckCircle2, Clock, AlertCircle, Car, Navigation, ChevronRight, LogOut, Phone } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { socket } from '../lib/socket';
-
 import { useNavigate } from 'react-router-dom';
 
 export default function DriverApp() {
@@ -24,53 +24,70 @@ export default function DriverApp() {
     }
     if (!currentUser) return;
 
-    // Fetch assigned rides
-    const fetchRides = async () => {
-      try {
-        const res = await fetch(`/api/rides?driverId=${currentUser.uid}`);
-        const data = await res.json();
-        setActiveRides(data.filter((r: any) => r.status !== 'completed' && r.status !== 'cancelled'));
-      } catch (err) {
-        console.error('Error fetching rides:', err);
-      }
-    };
+    // Fetch assigned rides from Firestore
+    const ridesQuery = query(
+      collection(db, 'rides'),
+      where('driverId', '==', currentUser.uid),
+      where('status', 'not-in', ['completed', 'cancelled'])
+    );
 
-    fetchRides();
+    const unsubRides = onSnapshot(ridesQuery, (snapshot) => {
+      const rides = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      rides.sort((a: any, b: any) => {
+        const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(0);
+        const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(0);
+        return dateB.getTime() - dateA.getTime();
+      });
+      setActiveRides(rides);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'rides');
+    });
 
-    // Update location periodically
-    const interval = setInterval(() => {
+    // Update location periodically to Firestore
+    const interval = setInterval(async () => {
       if (status !== 'offline') {
         const newLat = location.lat + (Math.random() - 0.5) * 0.001;
         const newLng = location.lng + (Math.random() - 0.5) * 0.001;
-        setLocation({ lat: newLat, lng: newLng });
+        const newLoc = { lat: newLat, lng: newLng };
+        setLocation(newLoc);
         
-        fetch('/api/driver-locations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        try {
+          const locRef = doc(db, 'driver_locations', currentUser.uid);
+          await setDoc(locRef, {
             driverId: currentUser.uid,
             driverName: profile?.displayName || 'Driver',
             lat: newLat,
             lng: newLng,
-            status: status
-          })
-        });
-      }
-    }, 5000);
+            status: status,
+            updatedAt: serverTimestamp()
+          });
 
-    return () => clearInterval(interval);
-  }, [currentUser, status, location, profile]);
+          // Also save to history
+          await addDoc(collection(db, 'driver_locations', currentUser.uid, 'history'), {
+            lat: newLat,
+            lng: newLng,
+            timestamp: serverTimestamp()
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, `driver_locations/${currentUser.uid}`);
+        }
+      }
+    }, 10000); // Increased interval to 10s for better performance
+
+    return () => {
+      unsubRides();
+      clearInterval(interval);
+    };
+  }, [currentUser, status, location, profile, authLoading, navigate]);
 
   const updateRideStatus = async (rideId: string | number, newStatus: string) => {
     try {
-      await fetch(`/api/rides/${rideId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
+      await updateDoc(doc(db, 'rides', String(rideId)), {
+        status: newStatus,
+        updatedAt: serverTimestamp()
       });
-      setActiveRides(prev => prev.map(r => r.id === rideId ? { ...r, status: newStatus } : r));
     } catch (err) {
-      console.error('Error updating ride status:', err);
+      handleFirestoreError(err, OperationType.UPDATE, `rides/${rideId}`);
     }
   };
 
@@ -280,6 +297,9 @@ export default function DriverApp() {
                         </div>
                         <div className="text-right">
                           <p className="text-lg font-bold text-pex-blue">€{ride.price}</p>
+                          {(ride.status === 'in_progress' || ride.status === 'completed') && ride.estimatedDuration && (
+                            <p className="text-[10px] text-pex-gold font-bold">Est. {Math.round(ride.estimatedDuration)} min</p>
+                          )}
                           <p className="text-[10px] text-gray-400">Fixed Fare</p>
                         </div>
                       </div>

@@ -12,11 +12,33 @@ import EventLogistics from './pages/services/EventLogistics';
 import PrivacyPolicy from './pages/legal/PrivacyPolicy';
 import TermsOfService from './pages/legal/TermsOfService';
 import CookiePolicy from './pages/legal/CookiePolicy';
-import { Car, ShieldCheck, LogIn, LogOut, ExternalLink, Navigation, Info, Mail, Phone, MapPin, Instagram, Twitter, Facebook } from 'lucide-react';
+import DataSharing from './pages/legal/DataSharing';
+import FAQ from './pages/legal/FAQ';
+import { Car, ShieldCheck, LogIn, LogOut, ExternalLink, Navigation, Info, Mail, Phone, MapPin, Instagram, Twitter, Facebook, Moon, Sun } from 'lucide-react';
 import { FirebaseProvider, useFirebase } from './FirebaseProvider';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { useState, useEffect } from 'react';
 
 function AppContent() {
   const { user, profile, logout, loading } = useFirebase();
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme) return savedTheme === 'dark';
+      return false; // Default to light mode for better visibility as requested
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [isDarkMode]);
 
   if (loading) {
     return (
@@ -32,7 +54,7 @@ function AppContent() {
         <Link to="/" className="flex items-center gap-2">
           <img 
             src="/logo.svg" 
-            alt="Passageiro Express Luxury" 
+            alt="Pex Ride" 
             className="h-12 object-contain"
             onError={(e) => {
               e.currentTarget.style.display = 'none';
@@ -41,12 +63,19 @@ function AppContent() {
           />
           <div className="hidden flex items-center gap-2">
             <div className="w-8 h-8 rounded-full bg-pex-gold flex items-center justify-center">
-              <span className="text-pex-blue font-bold text-sm">PEL</span>
+              <span className="text-pex-blue font-bold text-sm">PR</span>
             </div>
-            <span className="font-semibold tracking-widest text-lg">Passageiro Express luxury</span>
+            <span className="font-semibold tracking-widest text-lg uppercase">Pex Ride</span>
           </div>
         </Link>
         <div className="flex gap-4 items-center">
+          <button 
+            onClick={() => setIsDarkMode(!isDarkMode)}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors text-pex-gold"
+            title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          >
+            {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
+          </button>
           {profile?.role === 'admin' && (
             <Link to="/admin" className="flex items-center gap-2 hover:text-pex-gold transition-colors text-sm uppercase tracking-wider">
               <ShieldCheck size={16} />
@@ -90,6 +119,8 @@ function AppContent() {
           <Route path="/legal/privacy-policy" element={<PrivacyPolicy />} />
           <Route path="/legal/terms-of-service" element={<TermsOfService />} />
           <Route path="/legal/cookie-policy" element={<CookiePolicy />} />
+          <Route path="/legal/data-sharing" element={<DataSharing />} />
+          <Route path="/faq" element={<FAQ />} />
         </Routes>
       </main>
 
@@ -100,7 +131,7 @@ function AppContent() {
             <Link to="/" className="flex items-center gap-2">
               <img 
                 src="/logo.svg" 
-                alt="Passageiro Express Luxury" 
+                alt="Pex Ride" 
                 className="h-12 object-contain"
                 onError={(e) => {
                   e.currentTarget.style.display = 'none';
@@ -109,13 +140,13 @@ function AppContent() {
               />
               <div className="hidden flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full bg-pex-gold flex items-center justify-center">
-                  <span className="text-pex-blue font-bold text-sm">PEL</span>
+                  <span className="text-pex-blue font-bold text-sm">PR</span>
                 </div>
-                <span className="font-semibold tracking-widest text-lg">Passageiro Express luxury</span>
+                <span className="font-semibold tracking-widest text-lg uppercase">Pex Ride</span>
               </div>
             </Link>
             <p className="text-sm text-white/60 leading-relaxed">
-              Experience the pinnacle of private transportation. Our elite chauffeur service provides quiet luxury, safety, and punctuality across Portugal's most exclusive destinations.
+              Experience the pinnacle of private transportation with Pex Ride. Our elite chauffeur service provides quiet luxury, safety, and punctuality across Portugal's most exclusive destinations.
             </p>
             <div className="flex gap-4 pt-2">
               <Instagram size={20} className="text-white/40 hover:text-pex-gold cursor-pointer transition-colors" />
@@ -164,11 +195,12 @@ function AppContent() {
         </div>
         
         <div className="max-w-7xl mx-auto px-6 mt-16 pt-8 border-t border-white/5 flex flex-col md:flex-row justify-between items-center gap-4 text-[10px] uppercase tracking-widest text-white/40 font-bold">
-          <p>© 2026 Passageiro Express luxury. All rights reserved.</p>
+          <p>© 2026 Pex Ride. All rights reserved.</p>
           <div className="flex gap-8">
             <Link to="/legal/privacy-policy" className="hover:text-white transition-colors">Privacy Policy</Link>
             <Link to="/legal/terms-of-service" className="hover:text-white transition-colors">Terms of Service</Link>
-            <Link to="/legal/cookie-policy" className="hover:text-white transition-colors">Cookie Policy</Link>
+            <Link to="/legal/data-sharing" className="hover:text-white transition-colors">Data Sharing</Link>
+            <Link to="/faq" className="hover:text-white transition-colors">FAQ</Link>
           </div>
         </div>
       </footer>
@@ -178,10 +210,12 @@ function AppContent() {
 
 export default function App() {
   return (
-    <FirebaseProvider>
-      <Router>
-        <AppContent />
-      </Router>
-    </FirebaseProvider>
+    <ErrorBoundary>
+      <FirebaseProvider>
+        <Router>
+          <AppContent />
+        </Router>
+      </FirebaseProvider>
+    </ErrorBoundary>
   );
 }
