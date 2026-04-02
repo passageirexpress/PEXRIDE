@@ -208,7 +208,7 @@ export default function DriverApp() {
         </div>
       </header>
 
-      <main className="flex-1 p-4 max-w-4xl mx-auto w-full space-y-6">
+      <main className="flex-1 p-4 max-w-md mx-auto w-full space-y-6">
         <Tabs defaultValue="dashboard" className="w-full">
           <TabsList className="grid w-full grid-cols-4 mb-6 sticky top-20 z-40 bg-gray-50/80 backdrop-blur-md">
             <TabsTrigger value="dashboard">Dashboard</TabsTrigger>

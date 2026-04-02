@@ -113,11 +113,19 @@ export default function BookingPage() {
   
   const [isBooking, setIsBooking] = useState(false);
   const [bookingSuccess, setBookingSuccess] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentUrl, setPaymentUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [isGeocoding, setIsGeocoding] = useState(false);
   
+  // Payment Form State
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardExpiry, setCardExpiry] = useState('');
+  const [cardCvc, setCardCvc] = useState('');
+  const [cardName, setCardName] = useState('');
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+
   const [pickupError, setPickupError] = useState(false);
   const [dropoffError, setDropoffError] = useState(false);
 
@@ -631,7 +639,7 @@ export default function BookingPage() {
         price: finalTotalPrice,
         estimatedDuration: duration,
         estimatedDistance: distance,
-        status: checkoutUrl ? 'Pending Payment' : 'Pending',
+        status: 'Pending Payment',
         paymentOrderCode,
         paymentUrl: checkoutUrl,
         createdAt: Timestamp.now(),
@@ -647,10 +655,7 @@ export default function BookingPage() {
         }
       });
       
-      if (checkoutUrl) {
-        setPaymentUrl(checkoutUrl);
-      }
-      setBookingSuccess(true);
+      setShowPaymentModal(true);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -658,20 +663,36 @@ export default function BookingPage() {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-white pb-20">
-      {/* Header */}
-      <div className="bg-pex-blue text-white py-12 px-6">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-4xl font-light tracking-tight mb-2">Book Your Journey</h1>
-          <p className="text-white/90 font-light">Experience the pinnacle of private transportation.</p>
-        </div>
-      </div>
+  const handleProcessPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsProcessingPayment(true);
+    
+    // Simulate payment processing
+    setTimeout(() => {
+      setIsProcessingPayment(false);
+      setShowPaymentModal(false);
+      setBookingSuccess(true);
+    }, 2000);
+  };
 
-      <div className="max-w-4xl mx-auto px-6 -mt-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+  return (
+    <div className="min-h-screen bg-gray-50 flex justify-center">
+      <div className="w-full max-w-md bg-white shadow-2xl min-h-screen flex flex-col relative pb-20">
+        {/* Header */}
+        <div className="bg-pex-blue text-white py-8 px-6 rounded-b-3xl shadow-lg z-10 relative">
+          <div className="flex items-center gap-4 mb-4">
+            <button onClick={() => navigate(-1)} className="p-2 -ml-2 hover:bg-white/10 rounded-full transition-colors">
+              <ArrowRight className="rotate-180" size={24} />
+            </button>
+            <h1 className="text-2xl font-light tracking-tight">Book Journey</h1>
+          </div>
+          <p className="text-white/80 font-light text-sm">Experience the pinnacle of private transportation.</p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 -mt-4 pt-8 pb-6">
+          <div className="grid grid-cols-1 gap-6">
           {/* Left Column: Locations & Preferences */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="space-y-6">
             {/* Passenger Information */}
             <Card className="shadow-xl border border-gray-100 overflow-hidden">
               <CardHeader className="bg-white border-b border-gray-100">
@@ -681,7 +702,7 @@ export default function BookingPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4">
                   <div className="space-y-2">
                     <Label className="text-xs uppercase tracking-widest text-gray-700 font-semibold">Full Name</Label>
                     <Input 
@@ -713,7 +734,7 @@ export default function BookingPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-6 space-y-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4">
                   <div className="space-y-2">
                     <Label className="text-xs uppercase tracking-widest text-gray-700 font-semibold">Pickup Date & Time</Label>
                     <div className="relative">
@@ -764,7 +785,7 @@ export default function BookingPage() {
                     <MapPin className={`absolute left-3 top-1/2 -translate-y-1/2 ${pickupError ? 'text-red-500' : 'text-pex-gold'}`} size={18} />
                     <Input 
                       placeholder="Enter pickup address..." 
-                      className={`pl-10 h-12 bg-white border focus-visible:ring-pex-gold text-gray-900 ${pickupError ? 'border-red-500' : 'border-gray-200'}`}
+                      className={`pl-10 h-12 bg-white border focus-visible:ring-pex-gold text-gray-900 truncate pr-4 ${pickupError ? 'border-red-500' : 'border-gray-200'}`}
                       value={pickup}
                       onChange={(e) => {
                         handlePickupChange(e.target.value);
@@ -855,7 +876,7 @@ export default function BookingPage() {
                         <MapPin className={`absolute left-3 top-1/2 -translate-y-1/2 ${dropoffError ? 'text-red-500' : 'text-pex-blue'}`} size={18} />
                         <Input 
                           placeholder="Enter destination..." 
-                          className={`pl-10 h-12 bg-white border focus-visible:ring-pex-gold text-gray-900 ${dropoffError ? 'border-red-500' : 'border-gray-200'}`}
+                          className={`pl-10 h-12 bg-white border focus-visible:ring-pex-gold text-gray-900 truncate pr-4 ${dropoffError ? 'border-red-500' : 'border-gray-200'}`}
                           value={dropoff}
                           onChange={(e) => {
                             handleDropoffChange(e.target.value);
@@ -949,7 +970,7 @@ export default function BookingPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-4">
                   {filteredVehicleTypes.map((vt, i) => (
                     <button
                       key={vt.id}
@@ -994,7 +1015,7 @@ export default function BookingPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-6 space-y-8">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="grid grid-cols-1 gap-8">
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <div className="space-y-0.5">
@@ -1252,6 +1273,91 @@ export default function BookingPage() {
         </div>
       </div>
 
+      {/* Payment Modal */}
+      <Dialog open={showPaymentModal} onOpenChange={setShowPaymentModal}>
+        <DialogContent className="sm:max-w-[400px] p-6">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold text-pex-blue mb-2">Secure Checkout</DialogTitle>
+            <DialogDescription className="text-gray-500">
+              Enter your payment details to confirm your booking.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <form onSubmit={handleProcessPayment} className="space-y-4 mt-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-bold uppercase tracking-widest text-gray-500">Name on Card</Label>
+              <Input 
+                required
+                placeholder="John Doe" 
+                value={cardName}
+                onChange={(e) => setCardName(e.target.value)}
+                className="h-12 bg-gray-50 border-gray-200 focus-visible:ring-pex-gold"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold uppercase tracking-widest text-gray-500">Card Number</Label>
+              <Input 
+                required
+                placeholder="0000 0000 0000 0000" 
+                value={cardNumber}
+                onChange={(e) => setCardNumber(e.target.value)}
+                maxLength={19}
+                className="h-12 bg-gray-50 border-gray-200 focus-visible:ring-pex-gold"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-xs font-bold uppercase tracking-widest text-gray-500">Expiry</Label>
+                <Input 
+                  required
+                  placeholder="MM/YY" 
+                  value={cardExpiry}
+                  onChange={(e) => setCardExpiry(e.target.value)}
+                  maxLength={5}
+                  className="h-12 bg-gray-50 border-gray-200 focus-visible:ring-pex-gold"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-bold uppercase tracking-widest text-gray-500">CVC</Label>
+                <Input 
+                  required
+                  placeholder="123" 
+                  value={cardCvc}
+                  onChange={(e) => setCardCvc(e.target.value)}
+                  maxLength={4}
+                  className="h-12 bg-gray-50 border-gray-200 focus-visible:ring-pex-gold"
+                />
+              </div>
+            </div>
+            
+            <Button 
+              type="submit"
+              disabled={isProcessingPayment}
+              className="w-full bg-pex-blue text-white font-bold h-14 rounded-xl mt-6 hover:bg-pex-blue/90 transition-colors"
+            >
+              {isProcessingPayment ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  Processing...
+                </div>
+              ) : (
+                `Pay €${(
+                  tripType === 'hourly' 
+                    ? ((Number(selectedVehicle?.basePrice || 0) * 3) * (Number(selectedVehicle?.multiplier || 1)) * Number(durationHours) * 1.23)
+                    : (Math.max(
+                        ((Number(selectedVehicle?.basePrice || 0) + 
+                        ((Number(selectedVehicle?.pricePerKm || 1.5) * (distance || 0))) + 
+                        ((Number(selectedVehicle?.pricePerMin || 0.5) * (duration || 0)))) * 
+                        (Number(selectedVehicle?.multiplier || 1))),
+                        (Number(selectedVehicle?.minFare || 0))
+                      ) * 1.23)
+                ).toFixed(2)}`
+              )}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       {/* Success Dialog */}
       <Dialog open={bookingSuccess} onOpenChange={setBookingSuccess}>
         <DialogContent className="sm:max-w-[400px] text-center p-12">
@@ -1260,25 +1366,15 @@ export default function BookingPage() {
           </div>
           <DialogHeader>
             <DialogTitle className="text-2xl font-bold text-pex-blue mb-2">
-              {paymentUrl ? 'Booking Initiated!' : 'Booking Confirmed!'}
+              Booking Confirmed!
             </DialogTitle>
             <DialogDescription className="text-gray-500">
-              {paymentUrl 
-                ? 'Your booking has been created. Please proceed to payment to finalize your reservation.'
-                : 'Your chauffeur has been notified and is preparing for your journey. You can track your ride in the dashboard.'}
+              Your payment was successful. Your chauffeur has been notified and is preparing for your journey. You can track your ride in the dashboard.
             </DialogDescription>
           </DialogHeader>
           <div className="mt-8 space-y-3">
-            {paymentUrl && (
-              <Button 
-                className="w-full bg-pex-gold text-pex-blue font-bold h-12 hover:bg-pex-blue hover:text-white transition-colors" 
-                onClick={() => window.open(paymentUrl, '_blank')}
-              >
-                Proceed to Payment
-              </Button>
-            )}
             <Button 
-              className={`w-full h-12 ${paymentUrl ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'bg-pex-blue text-white hover:bg-pex-blue/90'}`} 
+              className="w-full h-12 bg-pex-blue text-white hover:bg-pex-blue/90" 
               onClick={() => navigate('/')}
             >
               Return to Home
@@ -1286,6 +1382,7 @@ export default function BookingPage() {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
     </div>
   );
 }
