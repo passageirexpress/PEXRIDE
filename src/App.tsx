@@ -16,11 +16,31 @@ import DataSharing from './pages/legal/DataSharing';
 import FAQ from './pages/legal/FAQ';
 import { Car, ShieldCheck, LogIn, LogOut, ExternalLink, Navigation, Info, Mail, Phone, MapPin, Instagram, Twitter, Facebook, Moon, Sun } from 'lucide-react';
 import { FirebaseProvider, useFirebase } from './FirebaseProvider';
+import { db } from './firebase';
+import { onSnapshot, doc } from 'firebase/firestore';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useState, useEffect } from 'react';
 
 function AppContent() {
   const { user, profile, logout, loading } = useFirebase();
+  const [footerSettings, setFooterSettings] = useState({
+    address: 'Av. da Liberdade 110, 1269-042 Lisboa, Portugal',
+    phone: '+351 213 811 400',
+    email: 'concierge@pex-ride.com',
+    instagram: 'https://instagram.com',
+    twitter: 'https://twitter.com',
+    facebook: 'https://facebook.com'
+  });
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'settings', 'footer'), (docSnap) => {
+      if (docSnap.exists()) {
+        setFooterSettings(prev => ({ ...prev, ...docSnap.data() }));
+      }
+    });
+    return () => unsub();
+  }, []);
+
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       const savedTheme = localStorage.getItem('theme');
@@ -149,9 +169,15 @@ function AppContent() {
               Experience the pinnacle of private transportation with Pex Ride. Our elite chauffeur service provides quiet luxury, safety, and punctuality across Portugal's most exclusive destinations.
             </p>
             <div className="flex gap-4 pt-2">
-              <Instagram size={20} className="text-white/40 hover:text-pex-gold cursor-pointer transition-colors" />
-              <Twitter size={20} className="text-white/40 hover:text-pex-gold cursor-pointer transition-colors" />
-              <Facebook size={20} className="text-white/40 hover:text-pex-gold cursor-pointer transition-colors" />
+              <a href={footerSettings.instagram} target="_blank" rel="noopener noreferrer">
+                <Instagram size={20} className="text-white/40 hover:text-pex-gold cursor-pointer transition-colors" />
+              </a>
+              <a href={footerSettings.twitter} target="_blank" rel="noopener noreferrer">
+                <Twitter size={20} className="text-white/40 hover:text-pex-gold cursor-pointer transition-colors" />
+              </a>
+              <a href={footerSettings.facebook} target="_blank" rel="noopener noreferrer">
+                <Facebook size={20} className="text-white/40 hover:text-pex-gold cursor-pointer transition-colors" />
+              </a>
             </div>
           </div>
 
@@ -180,15 +206,15 @@ function AppContent() {
             <ul className="space-y-4 text-sm text-white/60">
               <li className="flex items-start gap-3">
                 <MapPin size={18} className="text-pex-gold shrink-0" />
-                <span>Av. da Liberdade 110, 1269-042 Lisboa, Portugal</span>
+                <span>{footerSettings.address}</span>
               </li>
               <li className="flex items-center gap-3">
                 <Phone size={18} className="text-pex-gold shrink-0" />
-                <span>+351 213 811 400</span>
+                <span>{footerSettings.phone}</span>
               </li>
               <li className="flex items-center gap-3">
                 <Mail size={18} className="text-pex-gold shrink-0" />
-                <span>concierge@pex-ride.com</span>
+                <span>{footerSettings.email}</span>
               </li>
             </ul>
           </div>

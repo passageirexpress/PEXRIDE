@@ -26,7 +26,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Shield, Bell, Send, Car, UserPlus, X, VolumeX, Thermometer, History, LayoutDashboard, Navigation, ChevronRight, RefreshCw, Settings, CreditCard, MapPin, User } from 'lucide-react';
+import { Map, Users, DollarSign, MessageSquare, Plus, Search, Filter, MoreVertical, CheckCircle2, Clock, AlertCircle, Trash2, ShieldCheck, Shield, Bell, Send, Car, UserPlus, X, VolumeX, Thermometer, History, LayoutDashboard, Navigation, ChevronRight, RefreshCw, Settings, CreditCard, MapPin, User, Info } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useFirebase, handleFirestoreError, OperationType } from '../FirebaseProvider';
 import { collection, query, onSnapshot, orderBy, doc, updateDoc, deleteDoc, limit, addDoc, serverTimestamp, setDoc, getDocs, where, Timestamp } from 'firebase/firestore';
@@ -185,6 +185,8 @@ export default function AdminDashboard() {
         snapshot.docs.forEach(doc => {
           if (doc.id === 'pricing') {
             setGlobalSettings(doc.data().value);
+          } else if (doc.id === 'footer') {
+            setFooterSettings(prev => ({ ...prev, ...doc.data() }));
           }
         });
       },
@@ -411,6 +413,14 @@ export default function AdminDashboard() {
   const [isAddingPOI, setIsAddingPOI] = useState(false);
   const [newPOI, setNewPOI] = useState({ name: '', price: 0, tourPrice: 0, duration: '', imageUrl: '', status: 'Active' });
   const [globalSettings, setGlobalSettings] = useState({ normal_price_per_km: 1.5, base_fare: 5.0, price_per_min: 0.5, min_fare: 15.0 });
+  const [footerSettings, setFooterSettings] = useState({
+    address: 'Av. da Liberdade 110, 1269-042 Lisboa, Portugal',
+    phone: '+351 213 811 400',
+    email: 'concierge@pex-ride.com',
+    instagram: 'https://instagram.com',
+    twitter: 'https://twitter.com',
+    facebook: 'https://facebook.com'
+  });
 
   // Driver Registration States
   const [isAddingDriver, setIsAddingDriver] = useState(false);
@@ -514,9 +524,13 @@ export default function AdminDashboard() {
         value: globalSettings,
         updatedAt: serverTimestamp()
       });
-      addNotification('Pricing settings saved', 'success');
+      await setDoc(doc(db, 'settings', 'footer'), {
+        ...footerSettings,
+        updatedAt: serverTimestamp()
+      });
+      addNotification('Settings saved successfully', 'success');
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, 'settings/pricing');
+      handleFirestoreError(err, OperationType.WRITE, 'settings');
     }
   };
 
@@ -1727,6 +1741,45 @@ export default function AdminDashboard() {
                   ))}
                 </CardContent>
               </Card>
+
+              <Card className="md:col-span-2">
+                <CardHeader>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Info size={20} className="text-pex-gold" />
+                    Footer & Contact Settings
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label>Address</Label>
+                      <Input value={footerSettings.address} onChange={e => setFooterSettings({...footerSettings, address: e.target.value})} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Phone</Label>
+                      <Input value={footerSettings.phone} onChange={e => setFooterSettings({...footerSettings, phone: e.target.value})} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Email</Label>
+                      <Input value={footerSettings.email} onChange={e => setFooterSettings({...footerSettings, email: e.target.value})} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label>Instagram URL</Label>
+                      <Input value={footerSettings.instagram} onChange={e => setFooterSettings({...footerSettings, instagram: e.target.value})} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>X (Twitter) URL</Label>
+                      <Input value={footerSettings.twitter} onChange={e => setFooterSettings({...footerSettings, twitter: e.target.value})} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Facebook URL</Label>
+                      <Input value={footerSettings.facebook} onChange={e => setFooterSettings({...footerSettings, facebook: e.target.value})} />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
 
             <Card>
@@ -1754,13 +1807,23 @@ export default function AdminDashboard() {
                       >
                         <X size={14} className="text-red-500" />
                       </Button>
-                      <div className="space-y-1">
-                        <Label className="text-[10px] uppercase text-gray-400">Name</Label>
-                        <Input 
-                          value={vt.name} 
-                          onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { name: e.target.value })}
-                          className="h-8 text-sm font-bold"
-                        />
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase text-gray-400">Name</Label>
+                          <Input 
+                            value={vt.name} 
+                            onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { name: e.target.value })}
+                            className="h-8 text-sm font-bold"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-[10px] uppercase text-gray-400">Example Vehicle (e.g. Mercedes S-Class)</Label>
+                          <Input 
+                            value={vt.exampleVehicle || ''} 
+                            onChange={e => updateDoc(doc(db, 'vehicle_types', vt.id), { exampleVehicle: e.target.value })}
+                            className="h-8 text-sm"
+                          />
+                        </div>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <div className="space-y-1">

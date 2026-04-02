@@ -156,7 +156,7 @@ service cloud.firestore {
     function isValidRide(data) {
       return hasRequiredFields(['passengerId', 'passengerName', 'pickupLocation', 'dropoffLocation', 'status', 'rideType', 'vehicleName', 'price', 'createdAt']) &&
              data.passengerId is string &&
-             data.status in ['requested', 'accepted', 'in-progress', 'completed', 'cancelled'] &&
+             data.status in ['requested', 'accepted', 'in-progress', 'completed', 'cancelled', 'Pending', 'Pending Payment'] &&
              data.price is number && data.price >= 0 &&
              data.createdAt is timestamp;
     }

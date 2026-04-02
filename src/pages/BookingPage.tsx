@@ -84,10 +84,26 @@ export default function BookingPage() {
     { id: 'first_class', name: 'First Class', description: 'Mercedes S-Class, BMW 7 Series', capacity: 3, basePrice: 90, multiplier: 2, pricePerKm: 4.0, pricePerMin: 1.2, minFare: 100, hourlyRate: 120 }
   ]);
   const [tripType, setTripType] = useState(state?.tripType || 'one-way');
+  const [selectedPOI, setSelectedPOI] = useState<string | null>(state?.selectedPOI || null);
   const [durationHours, setDurationHours] = useState(state?.duration || '4');
   const [reservationTime, setReservationTime] = useState('');
   const [paxCount, setPaxCount] = useState(1);
   const [luggageCount, setLuggageCount] = useState(0);
+
+  useEffect(() => {
+    if (state?.selectedPOI) {
+      setTripType('tour');
+      setSelectedPOI(state.selectedPOI);
+    }
+  }, [state]);
+  
+  const filteredVehicleTypes = vehicleTypes.filter(vt => (vt.capacity || 4) >= paxCount);
+
+  useEffect(() => {
+    if (selectedVehicleIdx >= filteredVehicleTypes.length && filteredVehicleTypes.length > 0) {
+      setSelectedVehicleIdx(0);
+    }
+  }, [paxCount, filteredVehicleTypes]);
   const [silentMode, setSilentMode] = useState(false);
   const [temperature, setTemperature] = useState([22]);
   const [selectedPlaylist, setSelectedPlaylist] = useState('Lounge & Jazz');
@@ -362,7 +378,7 @@ export default function BookingPage() {
     }
   }, [pickupCoords, dropoffCoords, tripType]);
 
-  const selectedVehicle = vehicleTypes[selectedVehicleIdx] || { name: 'Business', basePrice: 15, multiplier: 1.5, pricePerKm: 0, pricePerMin: 0, minFare: 0, hourlyRate: 45 };
+  const selectedVehicle = filteredVehicleTypes[selectedVehicleIdx] || { name: 'Business', basePrice: 15, multiplier: 1.5, pricePerKm: 0, pricePerMin: 0, minFare: 0, hourlyRate: 45 };
   
   const handleCalculateRoute = async () => {
     setIsGeocoding(true);
@@ -611,7 +627,7 @@ export default function BookingPage() {
         pickupLocation: pickup,
         dropoffLocation: tripType === 'hourly' ? `Hourly Booking (${durationHours}h)` : dropoff,
         rideType: selectedVehicle.name,
-        vehicleName: selectedVehicle.name === 'Business' ? 'Mercedes S-Class' : selectedVehicle.name === 'SUV' ? 'Range Rover' : 'Mercedes V-Class',
+        vehicleName: selectedVehicle.exampleVehicle || (selectedVehicle.name === 'Business' ? 'Mercedes S-Class' : selectedVehicle.name === 'SUV' ? 'Range Rover' : 'Mercedes V-Class'),
         price: finalTotalPrice,
         estimatedDuration: duration,
         estimatedDistance: distance,
@@ -934,7 +950,7 @@ export default function BookingPage() {
               </CardHeader>
               <CardContent className="p-6">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {vehicleTypes.map((vt, i) => (
+                  {filteredVehicleTypes.map((vt, i) => (
                     <button
                       key={vt.id}
                       onClick={() => setSelectedVehicleIdx(i)}
@@ -951,11 +967,11 @@ export default function BookingPage() {
                       )}
                       <div className="text-xs uppercase tracking-widest text-gray-700 mb-1">{vt.name}</div>
                       <div className="font-bold text-pex-blue mb-2">
-                        {vt.description || vt.name}
+                        {vt.exampleVehicle || vt.description || vt.name}
                       </div>
                       <div className="flex items-center gap-3 text-xs text-gray-700">
                         <span className="flex items-center gap-1"><Users size={12} /> {vt.capacity}</span>
-                        <span className="flex items-center gap-1"><Car size={12} /> {vt.name.includes('SUV') ? '4' : '2'} Bags</span>
+                        <span className="flex items-center gap-1"><Car size={12} /> {vt.name.includes('SUV') || vt.name.includes('Van') ? '4' : '2'} Bags</span>
                       </div>
                       <div className="mt-4 flex items-end justify-between">
                         <div className="text-lg font-light text-pex-gold">

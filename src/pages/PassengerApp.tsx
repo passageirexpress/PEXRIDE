@@ -23,6 +23,7 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot, orderBy, addDoc, Timestamp, doc, updateDoc, getDocs, limit, setDoc, serverTimestamp } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { ADDRESS_COORDS, ADDRESS_SUGGESTIONS } from '../constants';
+import Chat from '../components/Chat';
 
 export default function PassengerApp() {
   const { user } = useFirebase();
@@ -44,6 +45,7 @@ export default function PassengerApp() {
   const [selectedPois, setSelectedPois] = useState<string[]>([]);
   const [globalSettings, setGlobalSettings] = useState({ normal_price_per_km: 1.5, base_fare: 5.0, price_per_min: 0.5, min_fare: 15.0 });
   const [rideHistory, setRideHistory] = useState<any[]>([]);
+  const [activeRide, setActiveRide] = useState<any | null>(null);
   
   // Chat States
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -284,12 +286,30 @@ export default function PassengerApp() {
       handleFirestoreError(err, OperationType.GET, 'rides');
     });
 
+    // Fetch Active Ride from Firestore
+    const activeRideQuery = query(
+      collection(db, 'rides'),
+      where('passengerId', '==', user.uid),
+      where('status', 'in', ['requested', 'accepted', 'arrived', 'picked-up']),
+      limit(1)
+    );
+    const unsubActiveRide = onSnapshot(activeRideQuery, (snapshot) => {
+      if (!snapshot.empty) {
+        setActiveRide({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() });
+      } else {
+        setActiveRide(null);
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'active_ride');
+    });
+
     return () => {
       unsubMessages();
       unsubPois();
       unsubSettings();
       unsubVehicleTypes();
       unsubRideHistory();
+      unsubActiveRide();
     };
   }, [user, isChatOpen]);
 
@@ -1194,40 +1214,62 @@ export default function PassengerApp() {
 
       {/* Booking section removed */}
 
-      {/* Chat Widget */}
-      <div className="fixed bottom-6 right-6 z-50">
-        <AnimatePresence>
-          {isChatOpen && (
-            <motion.div initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.95 }} className="absolute bottom-16 right-0 w-80 h-96 bg-white rounded-2xl shadow-2xl border border-gray-100 flex flex-col overflow-hidden">
-              <div className="p-4 bg-pex-blue text-white flex justify-between items-center">
-                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" /><span className="font-medium">Support</span></div>
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-white/10" onClick={() => setIsChatOpen(false)}><X size={18} /></Button>
-              </div>
-              <ScrollArea className="flex-1 p-4" ref={scrollRef}>
-                <div className="space-y-4">
-                  {messages.map((m, i) => (
-                    <div key={i} className={`flex ${m.sender_id === user?.uid ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${m.sender_id === user?.uid ? 'bg-pex-blue text-white rounded-tr-none' : 'bg-gray-100 text-gray-800 rounded-tl-none'}`}>
-                        {m.text}
-                        <div className={`text-[9px] mt-1 opacity-50 flex items-center gap-1 ${m.sender_id === user?.uid ? 'justify-end' : 'justify-start'}`}>
-                          {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                          {m.sender_id === user?.uid && m.read_at && <CheckCircle2 size={8} />}
-                        </div>
-                      </div>
+      {/* Active Ride Banner */}
+      <AnimatePresence>
+        {activeRide && (
+          <motion.div 
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            className="fixed bottom-20 left-4 right-4 z-50"
+          >
+            <Card className="bg-pex-blue text-white shadow-2xl border-none overflow-hidden">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-white/10 rounded-full animate-pulse">
+                      <Navigation size={20} className="text-pex-gold" />
                     </div>
-                  ))}
-                  {isTyping && <div className="flex justify-start"><div className="bg-gray-100 p-2 rounded-xl rounded-tl-none flex gap-1"><div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce" /><div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce [animation-delay:0.2s]" /><div className="w-1 h-1 bg-gray-400 rounded-full animate-bounce [animation-delay:0.4s]" /></div></div>}
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-white/60 font-bold">Active Journey</p>
+                      <p className="text-sm font-bold capitalize">{activeRide.status.replace('-', ' ')}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button 
+                      size="sm" 
+                      variant="ghost" 
+                      className="text-white hover:bg-white/10"
+                      onClick={() => setIsChatOpen(true)}
+                    >
+                      <MessageCircle size={18} className="mr-2" />
+                      Chat
+                    </Button>
+                    <Button 
+                      size="sm" 
+                      className="bg-pex-gold text-pex-blue hover:bg-pex-gold/90 font-bold"
+                      onClick={() => navigate('/booking', { state: { activeRideId: activeRide.id } })}
+                    >
+                      Details
+                    </Button>
+                  </div>
                 </div>
-              </ScrollArea>
-              <form onSubmit={handleSendMessage} className="p-3 border-t border-gray-100 flex gap-2">
-                <Input placeholder="Type a message..." value={newMessage} onChange={(e) => onInputChange(e.target.value)} className="flex-1 h-9 text-sm bg-gray-50 border-none focus-visible:ring-pex-gold" />
-                <Button type="submit" size="icon" className="h-9 w-9 bg-pex-blue hover:bg-pex-blue/90 text-white"><Send size={16} /></Button>
-              </form>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <Button size="icon" className={`h-14 w-14 rounded-full shadow-2xl transition-all duration-300 ${isChatOpen ? 'bg-pex-gold text-pex-blue rotate-90' : 'bg-pex-blue text-white hover:scale-110'}`} onClick={() => setIsChatOpen(!isChatOpen)}>{isChatOpen ? <X size={24} /> : <MessageCircle size={24} />}</Button>
-      </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Chat Modal */}
+      <Dialog open={isChatOpen} onOpenChange={setIsChatOpen}>
+        <DialogContent className="sm:max-w-[450px] p-0 h-[600px] flex flex-col overflow-hidden">
+          <Chat 
+            chatId={activeRide?.id || 'general'} 
+            recipientName={activeRide?.driverName || 'PEX Support'} 
+            recipientRole={activeRide?.driverName ? 'Chauffeur' : 'Support'} 
+          />
+        </DialogContent>
+      </Dialog>
 
       {/* Notifications */}
       <div className="fixed top-6 right-6 z-[100] space-y-2">

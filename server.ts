@@ -5,9 +5,12 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
+import { GoogleGenAI } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 async function startServer() {
   const app = express();
@@ -29,6 +32,24 @@ async function startServer() {
   // API Routes
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', database: 'firebase' });
+  });
+
+  app.post('/api/translate', async (req, res) => {
+    const { text, targetLanguage } = req.body;
+    if (!text || !targetLanguage) {
+      return res.status(400).json({ error: 'Missing text or targetLanguage' });
+    }
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Translate the following text to ${targetLanguage}. Return ONLY the translated text, no other commentary: "${text}"`,
+      });
+      res.json({ translatedText: response.text });
+    } catch (error) {
+      console.error('Translation error:', error);
+      res.status(500).json({ error: 'Translation failed' });
+    }
   });
 
   // Viva.com Payment Integration Skeleton
