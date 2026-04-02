@@ -206,6 +206,12 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Tours Collection
+    match /tours/{tourId} {
+      allow read: if true; // Publicly readable
+      allow write: if isAdmin();
+    }
+
     // Chats Collection
     match /chats/{chatId} {
       allow read: if isAuthenticated(); // Simplified for now, should ideally check if user is participant

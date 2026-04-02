@@ -40,6 +40,17 @@ export default function PassengerApp() {
   const [widgetDuration, setWidgetDuration] = useState('4');
   const [widgetPickupSuggestions, setWidgetPickupSuggestions] = useState<any[]>([]);
   const [widgetDropoffSuggestions, setWidgetDropoffSuggestions] = useState<any[]>([]);
+  const [tours, setTours] = useState<any[]>([]);
+
+  useEffect(() => {
+    import('firebase/firestore').then(({ collection, onSnapshot, getFirestore }) => {
+      const db = getFirestore();
+      const unsubTours = onSnapshot(collection(db, 'tours'), (snapshot) => {
+        setTours(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      });
+      return () => unsubTours();
+    });
+  }, []);
 
   useEffect(() => {
     const fetchPickup = async () => {
@@ -272,10 +283,9 @@ export default function PassengerApp() {
                       onChange={(e) => setWidgetDropoff(e.target.value)}
                     >
                       <option value="">Select a Tour</option>
-                      <option value="Sintra & Cascais Tour">Sintra & Cascais Tour (8h)</option>
-                      <option value="Douro Valley Wine Tour">Douro Valley Wine Tour (10h)</option>
-                      <option value="Fatima & Obidos Tour">Fatima & Obidos Tour (8h)</option>
-                      <option value="Lisbon City Tour">Lisbon City Tour (4h)</option>
+                      {tours.filter(t => t.isActive).map(tour => (
+                        <option key={tour.id} value={tour.name}>{tour.name} ({tour.durationHours}h)</option>
+                      ))}
                     </select>
                   </div>
                 )}

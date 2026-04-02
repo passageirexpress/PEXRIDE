@@ -94,6 +94,9 @@ export default function BookingPage() {
     if (state?.selectedPOI) {
       setTripType('tour');
       setSelectedPOI(state.selectedPOI);
+    } else if (state?.tripType === 'tour' && state?.dropoff) {
+      setTripType('tour');
+      setSelectedPOI(state.dropoff);
     }
   }, [state]);
   
@@ -128,6 +131,7 @@ export default function BookingPage() {
 
   const [pickupError, setPickupError] = useState(false);
   const [dropoffError, setDropoffError] = useState(false);
+  const [tours, setTours] = useState<any[]>([]);
 
   useEffect(() => {
     if (profile) {
@@ -157,7 +161,18 @@ export default function BookingPage() {
       handleFirestoreError(err, OperationType.GET, 'vehicle_types');
     });
 
-    return () => unsubVehicleTypes();
+    const unsubTours = onSnapshot(collection(db, 'tours'), (snapshot) => {
+      if (!snapshot.empty) {
+        setTours(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      }
+    }, (err) => {
+      handleFirestoreError(err, OperationType.GET, 'tours');
+    });
+
+    return () => {
+      unsubVehicleTypes();
+      unsubTours();
+    };
   }, []);
 
   const isSelectingPickup = React.useRef(false);
@@ -457,6 +472,15 @@ export default function BookingPage() {
   };
 
   const calculateTotalPrice = () => {
+    if (tripType === 'tour' && selectedPOI) {
+      const tour = tours.find(t => t.name === selectedPOI);
+      if (tour) {
+        const basePrice = Number(tour.basePrice) || 0;
+        const subtotal = basePrice * (Number(selectedVehicle.multiplier) || 1);
+        return subtotal * 1.23; // Add 23% IVA
+      }
+    }
+
     if (tripType === 'hourly') {
       const basePrice = Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0;
       const hourlyRate = (Number(selectedVehicle.hourlyRate) || (basePrice * 3)) * (Number(selectedVehicle.multiplier) || 1);
@@ -584,7 +608,14 @@ export default function BookingPage() {
 
       // Recalculate price with final distance/duration
       let finalTotalPrice = 0;
-      if (tripType === 'hourly') {
+      if (tripType === 'tour' && selectedPOI) {
+        const tour = tours.find(t => t.name === selectedPOI);
+        if (tour) {
+          const basePrice = Number(tour.basePrice) || 0;
+          const subtotal = basePrice * (Number(selectedVehicle.multiplier) || 1);
+          finalTotalPrice = subtotal * 1.23;
+        }
+      } else if (tripType === 'hourly') {
         const basePrice = Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0;
         const hourlyRate = (Number(selectedVehicle.hourlyRate) || (basePrice * 3)) * (Number(selectedVehicle.multiplier) || 1);
         const subtotal = hourlyRate * Number(durationHours);

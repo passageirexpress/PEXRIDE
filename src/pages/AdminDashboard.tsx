@@ -111,6 +111,9 @@ export default function AdminDashboard() {
   const [driverLocations, setDriverLocations] = useState<DriverLocation[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [pois, setPois] = useState<POI[]>([]);
+  const [tours, setTours] = useState<any[]>([]);
+  const [isAddingTour, setIsAddingTour] = useState(false);
+  const [newTour, setNewTour] = useState({ name: '', durationHours: 4, basePrice: 100, description: '', isActive: true });
   const [notifications, setNotifications] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   
@@ -171,6 +174,14 @@ export default function AdminDashboard() {
       (err) => handleFirestoreError(err, OperationType.GET, 'pois')
     );
 
+    const unsubTours = onSnapshot(
+      collection(db, 'tours'),
+      (snapshot) => {
+        setTours(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      },
+      (err) => handleFirestoreError(err, OperationType.GET, 'tours')
+    );
+
     const unsubVehicleTypes = onSnapshot(
       collection(db, 'vehicle_types'),
       (snapshot) => {
@@ -208,6 +219,7 @@ export default function AdminDashboard() {
       unsubLocations();
       unsubVehicles();
       unsubPois();
+      unsubTours();
       unsubVehicleTypes();
       unsubSettings();
       unsubUsers();
@@ -518,6 +530,29 @@ export default function AdminDashboard() {
     }
   };
 
+  const handleAddTour = async () => {
+    try {
+      await addDoc(collection(db, 'tours'), {
+        ...newTour,
+        createdAt: serverTimestamp()
+      });
+      setIsAddingTour(false);
+      setNewTour({ name: '', durationHours: 4, basePrice: 100, description: '', isActive: true });
+      addNotification('Tour added successfully', 'success');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'tours');
+    }
+  };
+
+  const handleDeleteTour = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'tours', id));
+      addNotification('Tour deleted', 'warning');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `tours/${id}`);
+    }
+  };
+
   const handleSaveSettings = async () => {
     try {
       await setDoc(doc(db, 'settings', 'pricing'), {
@@ -750,6 +785,13 @@ export default function AdminDashboard() {
             >
               <Map size={18} />
               <span className="text-sm font-medium">POI Manager</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('tours-manager')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'tours-manager' ? 'bg-white/10 text-pex-gold' : 'hover:bg-white/5'}`}
+            >
+              <Map size={18} />
+              <span className="text-sm font-medium">Tours Manager</span>
             </button>
             <button 
               onClick={() => setActiveTab('drivers')}
@@ -2183,6 +2225,87 @@ export default function AdminDashboard() {
                         <span className="font-bold text-pex-blue">Normal: €{poi.price}</span>
                         <span className="font-bold text-pex-gold">Tour: €{poi.tour_price}</span>
                       </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'tours-manager' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h1 className="text-2xl font-bold text-pex-blue">Tours Manager</h1>
+              <Button className="bg-pex-blue hover:bg-pex-blue/90 text-white" onClick={() => setIsAddingTour(true)}>
+                <Plus size={16} className="mr-2" /> Add New Tour
+              </Button>
+            </div>
+
+            {isAddingTour && (
+              <Card className="p-6 bg-white border-pex-gold/30">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-pex-blue">New Tour Details</h3>
+                  <Button variant="ghost" size="icon" onClick={() => setIsAddingTour(false)}><X size={18} /></Button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="space-y-2">
+                    <Label>Tour Name</Label>
+                    <Input value={newTour.name} onChange={e => setNewTour({...newTour, name: e.target.value})} placeholder="e.g. Sintra & Cascais Tour" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Duration (Hours)</Label>
+                    <Input type="number" value={newTour.durationHours} onChange={e => setNewTour({...newTour, durationHours: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Base Price (€)</Label>
+                    <Input type="number" value={newTour.basePrice} onChange={e => setNewTour({...newTour, basePrice: parseFloat(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Status</Label>
+                    <select 
+                      className="w-full h-10 px-3 rounded-md border border-input bg-background"
+                      value={newTour.isActive ? 'active' : 'inactive'} 
+                      onChange={e => setNewTour({...newTour, isActive: e.target.value === 'active'})}
+                    >
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2 md:col-span-3">
+                    <Label>Description</Label>
+                    <Input value={newTour.description} onChange={e => setNewTour({...newTour, description: e.target.value})} placeholder="Tour description..." />
+                  </div>
+                  <div className="flex items-end">
+                    <Button className="w-full bg-pex-gold text-pex-blue font-bold" onClick={handleAddTour}>Save Tour</Button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {tours.map((tour) => (
+                <Card key={tour.id} className="overflow-hidden">
+                  <CardContent className="p-4">
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="font-bold text-lg text-pex-blue">{tour.name}</h3>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:bg-red-50" onClick={() => handleDeleteTour(tour.id)}>
+                          <Trash2 size={16} />
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-500 mb-4 line-clamp-2">{tour.description}</p>
+                    <div className="flex items-center justify-between text-xs text-gray-500">
+                      <span className="flex items-center gap-1"><Clock size={12} /> {tour.durationHours} hours</span>
+                      <div className="flex flex-col items-end">
+                        <span className="font-bold text-pex-gold text-lg">€{tour.basePrice}</span>
+                      </div>
+                    </div>
+                    <div className="mt-2 text-right">
+                      <Badge variant={tour.isActive ? 'default' : 'secondary'} className={tour.isActive ? 'bg-green-500 hover:bg-green-600' : ''}>
+                        {tour.isActive ? 'Active' : 'Inactive'}
+                      </Badge>
                     </div>
                   </CardContent>
                 </Card>
