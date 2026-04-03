@@ -30,7 +30,8 @@ import {
   Shield,
   Star,
   Users,
-  RefreshCw
+  RefreshCw,
+  ArrowLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useFirebase, handleFirestoreError, OperationType } from '../FirebaseProvider';
@@ -79,9 +80,46 @@ export default function BookingPage() {
   
   const [selectedVehicleIdx, setSelectedVehicleIdx] = useState(0);
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([
-    { id: 'business', name: 'Business Class', description: 'Mercedes E-Class, BMW 5 Series', capacity: 3, basePrice: 45, multiplier: 1, pricePerKm: 2.2, pricePerMin: 0.6, minFare: 50, hourlyRate: 65 },
-    { id: 'business_van', name: 'Business Van/SUV', description: 'Mercedes V-Class, Cadillac Escalade', capacity: 5, basePrice: 65, multiplier: 1.5, pricePerKm: 3.0, pricePerMin: 0.8, minFare: 75, hourlyRate: 85 },
-    { id: 'first_class', name: 'First Class', description: 'Mercedes S-Class, BMW 7 Series', capacity: 3, basePrice: 90, multiplier: 2, pricePerKm: 4.0, pricePerMin: 1.2, minFare: 100, hourlyRate: 120 }
+    { 
+      id: 'economy', 
+      name: 'Economy', 
+      description: 'Mercedes C-Class, Audi A4', 
+      capacity: 3, 
+      pricing: { fixed: 17.65, tier1: 1.20, tier2: 1.00, tier3: 1.00 },
+      exampleVehicle: 'Mercedes C-Class'
+    },
+    { 
+      id: 'business_elite', 
+      name: 'Business Elite', 
+      description: 'Mercedes E-Class, BMW 5 Series', 
+      capacity: 3, 
+      pricing: { fixed: 20.00, tier1: 1.20, tier2: 1.10, tier3: 1.00 },
+      exampleVehicle: 'Mercedes E-Class'
+    },
+    { 
+      id: 'first_class', 
+      name: 'First Class', 
+      description: 'Mercedes S-Class, BMW 7 Series', 
+      capacity: 3, 
+      pricing: { fixed: 29.41, tier1: 1.70, tier2: 1.60, tier3: 1.50 },
+      exampleVehicle: 'Mercedes S-Class'
+    },
+    { 
+      id: 'luxury_suv', 
+      name: 'Luxury SUV', 
+      description: 'Range Rover, Cadillac Escalade', 
+      capacity: 5, 
+      pricing: { fixed: 20.00, tier1: 1.30, tier2: 1.20, tier3: 1.10 },
+      exampleVehicle: 'Range Rover'
+    },
+    { 
+      id: 'executive_van', 
+      name: 'Executive Van', 
+      description: 'Mercedes V-Class', 
+      capacity: 7, 
+      pricing: { fixed: 29.41, tier1: 1.70, tier2: 1.60, tier3: 1.50 },
+      exampleVehicle: 'Mercedes V-Class'
+    }
   ]);
   const [tripType, setTripType] = useState(state?.tripType || 'one-way');
   const [selectedPOI, setSelectedPOI] = useState<string | null>(state?.selectedPOI || null);
@@ -121,6 +159,11 @@ export default function BookingPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [isGeocoding, setIsGeocoding] = useState(false);
+  const [bookingStep, setBookingStep] = useState<'selection' | 'confirmation' | 'searching' | 'tracking' | 'completed'>('selection');
+  const [paymentMethod, setPaymentMethod] = useState<'card' | 'mbway' | 'cash'>('card');
+  const [driver, setDriver] = useState<any | null>(null);
+  const [eta, setEta] = useState<number | null>(null);
+  const [rideId, setRideId] = useState<string | null>(null);
   
   // Payment Form State
   const [cardNumber, setCardNumber] = useState('');
@@ -472,6 +515,9 @@ export default function BookingPage() {
   };
 
   const calculateTotalPrice = () => {
+    const selectedVehicle = filteredVehicleTypes[selectedVehicleIdx];
+    if (!selectedVehicle) return 0;
+
     if (tripType === 'tour' && selectedPOI) {
       const tour = tours.find(t => t.name === selectedPOI);
       if (tour) {
@@ -488,14 +534,27 @@ export default function BookingPage() {
       return subtotal * 1.23; // Add 23% IVA
     }
 
-    const base = Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0;
-    const kmPrice = (Number(selectedVehicle.pricePerKm) || 1.5) * (distance || 0);
+    // New pricing logic for one-way/round-trip
+    const dist = distance || 0;
+    const pricing = selectedVehicle.pricing;
+    if (!pricing) return 0;
+    
+    let price = 0;
+
+    if (dist <= 10) {
+      price = pricing.fixed;
+    } else if (dist <= 100) {
+      price = pricing.fixed + (dist - 10) * pricing.tier1;
+    } else if (dist <= 200) {
+      price = pricing.fixed + (90 * pricing.tier1) + (dist - 100) * pricing.tier2;
+    } else {
+      price = pricing.fixed + (90 * pricing.tier1) + (100 * pricing.tier2) + (dist - 200) * pricing.tier3;
+    }
+
+    // Add time component (keeping it same as before)
     const minPrice = (Number(selectedVehicle.pricePerMin) || 0.5) * (duration || 0);
+    const subtotal = price + minPrice;
     
-    let total = (base + kmPrice + minPrice) * (Number(selectedVehicle.multiplier) || 1);
-    
-    const minFare = (Number(selectedVehicle.minFare) || 0);
-    const subtotal = Math.max(total, minFare);
     return subtotal * 1.23; // Add 23% IVA
   };
 
@@ -517,7 +576,11 @@ export default function BookingPage() {
       return;
     }
 
-    setIsBooking(true);
+    setBookingStep('confirmation');
+  };
+
+  const startDriverSearch = async () => {
+    setBookingStep('searching');
     setIsGeocoding(true);
     setError(null);
     
@@ -606,92 +669,67 @@ export default function BookingPage() {
         }
       }
 
-      // Recalculate price with final distance/duration
-      let finalTotalPrice = 0;
-      if (tripType === 'tour' && selectedPOI) {
-        const tour = tours.find(t => t.name === selectedPOI);
-        if (tour) {
-          const basePrice = Number(tour.basePrice) || 0;
-          const subtotal = basePrice * (Number(selectedVehicle.multiplier) || 1);
-          finalTotalPrice = subtotal * 1.23;
-        }
-      } else if (tripType === 'hourly') {
-        const basePrice = Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0;
-        const hourlyRate = (Number(selectedVehicle.hourlyRate) || (basePrice * 3)) * (Number(selectedVehicle.multiplier) || 1);
-        const subtotal = hourlyRate * Number(durationHours);
-        finalTotalPrice = subtotal * 1.23;
-      } else {
-        const base = Number(selectedVehicle.basePrice) || Number(selectedVehicle.base_price) || 0;
-        const kmPrice = (Number(selectedVehicle.pricePerKm) || 1.5) * (finalDistance || 0);
-        const minPrice = (Number(selectedVehicle.pricePerMin) || 0.5) * (finalDuration || 0);
-        
-        let total = (base + kmPrice + minPrice) * (Number(selectedVehicle.multiplier) || 1);
-        
-        const minFare = (Number(selectedVehicle.minFare) || 0);
-        const subtotal = Math.max(total, minFare);
-        finalTotalPrice = subtotal * 1.23;
-      }
-
-      // Call Payment API
-      let paymentOrderCode = null;
-      let checkoutUrl = null;
-      
-      try {
-        const paymentRes = await fetch('/api/payments/viva/create-order', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            amount: finalTotalPrice,
-            customerEmail: user.email || 'customer@example.com',
-            description: `Pex Ride Booking - ${selectedVehicle.name}`
-          })
-        });
-
-        if (paymentRes.ok) {
-          const paymentData = await paymentRes.json();
-          paymentOrderCode = paymentData.orderCode;
-          checkoutUrl = paymentData.checkoutUrl;
-        } else {
-          console.warn('Payment initialization failed, proceeding with booking anyway for testing.');
-        }
-      } catch (e) {
-        console.warn('Payment API error:', e);
-      }
+      const selectedVehicle = filteredVehicleTypes[selectedVehicleIdx];
+      const finalTotalPrice = totalPrice;
 
       // Save ride to Firestore
-      await addDoc(collection(db, 'rides'), {
+      const docRef = await addDoc(collection(db, 'rides'), {
         passengerId: user.uid,
         passengerName: passengerName || user.displayName || profile?.displayName || 'Anonymous',
         passengerPhone: passengerPhone || '',
         pickupLocation: pickup,
         dropoffLocation: tripType === 'hourly' ? `Hourly Booking (${durationHours}h)` : dropoff,
         rideType: selectedVehicle.name,
-        vehicleName: selectedVehicle.exampleVehicle || (selectedVehicle.name === 'Business' ? 'Mercedes S-Class' : selectedVehicle.name === 'SUV' ? 'Range Rover' : 'Mercedes V-Class'),
+        vehicleName: selectedVehicle.exampleVehicle,
+        status: 'pending',
         price: finalTotalPrice,
-        estimatedDuration: duration,
-        estimatedDistance: distance,
-        status: 'Pending Payment',
-        paymentOrderCode,
-        paymentUrl: checkoutUrl,
+        distance: finalDistance,
+        duration: finalDuration,
+        tripType,
+        selectedPOI: selectedPOI || null,
+        durationHours: tripType === 'hourly' ? durationHours : null,
         createdAt: Timestamp.now(),
-        reservationTime: reservationTime ? Timestamp.fromDate(new Date(reservationTime)) : Timestamp.now(),
-        paxCount: Number(paxCount),
-        luggageCount: Number(luggageCount),
-        preferences: {
-          silentMode,
-          temperature: temperature[0],
-          playlist: selectedPlaylist,
-          tripType,
-          durationHours: tripType === 'hourly' ? Number(durationHours) : null
-        }
+        paymentMethod,
+        silentMode,
+        temperature: temperature[0],
+        playlist: selectedPlaylist
       });
-      
-      setShowPaymentModal(true);
+
+      setRideId(docRef.id);
+
+      // Simulate driver search
+      setTimeout(() => {
+        const mockDriver = {
+          id: 'd1',
+          name: 'Carlos Oliveira',
+          photo: 'https://i.pravatar.cc/150?u=d1',
+          vehicle: selectedVehicle.exampleVehicle,
+          plate: 'AA-00-BB',
+          rating: 4.9,
+          phone: '+351912345678'
+        };
+        setDriver(mockDriver);
+        setBookingStep('tracking');
+        setEta(5); // 5 minutes away
+      }, 4000);
+
     } catch (err: any) {
-      setError(err.message);
+      console.error('Booking error:', err);
+      setError(err.message || 'Failed to complete booking. Please try again.');
+      setBookingStep('selection');
     } finally {
       setIsBooking(false);
     }
+  };
+
+  const handleCancelRide = async () => {
+    if (rideId) {
+      // Update status in Firestore
+      // ...
+    }
+    setBookingStep('selection');
+    setDriver(null);
+    setRideId(null);
   };
 
   const handleProcessPayment = async (e: React.FormEvent) => {
@@ -721,10 +759,10 @@ export default function BookingPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 -mt-4 pt-8 pb-6">
-          <div className="grid grid-cols-1 gap-6">
-          {/* Left Column: Locations & Preferences */}
-          <div className="space-y-6">
-            {/* Passenger Information */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 max-w-7xl mx-auto w-full">
+            {/* Left Column: Locations & Preferences */}
+            <div className="lg:col-span-2 space-y-6">
+              {/* Passenger Information */}
             <Card className="shadow-xl border border-gray-100 overflow-hidden">
               <CardHeader className="bg-white border-b border-gray-100">
                 <CardTitle className="text-lg font-medium text-pex-blue flex items-center gap-2">
@@ -994,45 +1032,99 @@ export default function BookingPage() {
 
             {/* Vehicle Selection */}
             <Card className="shadow-xl border border-gray-100 overflow-hidden">
-              <CardHeader className="bg-white border-b border-gray-100">
+              <CardHeader className="bg-white border-b border-gray-100 flex flex-row items-center justify-between">
                 <CardTitle className="text-lg font-medium text-pex-blue flex items-center gap-2">
                   <Car size={20} className="text-pex-gold" />
                   Select Vehicle
                 </CardTitle>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="icon" 
+                    className="h-8 w-8 rounded-full border-gray-200"
+                    onClick={() => {
+                      const container = document.getElementById('vehicle-carousel');
+                      if (container) container.scrollBy({ left: -200, behavior: 'smooth' });
+                    }}
+                  >
+                    <ArrowLeft size={14} />
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="icon" 
+                    className="h-8 w-8 rounded-full border-gray-200"
+                    onClick={() => {
+                      const container = document.getElementById('vehicle-carousel');
+                      if (container) container.scrollBy({ left: 200, behavior: 'smooth' });
+                    }}
+                  >
+                    <ArrowRight size={14} />
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="p-6">
-                <div className="grid grid-cols-1 gap-4">
-                  {filteredVehicleTypes.map((vt, i) => (
-                    <button
-                      key={vt.id}
-                      onClick={() => setSelectedVehicleIdx(i)}
-                      className={`relative p-4 rounded-xl border-2 transition-all text-left ${
-                        selectedVehicleIdx === i 
-                          ? 'border-pex-gold bg-pex-gold/5 shadow-md' 
-                          : 'border-gray-200 bg-white hover:border-pex-gold/30'
-                      }`}
-                    >
-                      {selectedVehicleIdx === i && (
-                        <div className="absolute top-2 right-2 text-pex-gold">
-                          <CheckCircle2 size={16} />
+                <div 
+                  id="vehicle-carousel"
+                  className="flex overflow-x-auto gap-4 pb-4 snap-x no-scrollbar"
+                  style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                >
+                  {filteredVehicleTypes.map((vt, i) => {
+                    // Calculate estimated price for this vehicle
+                    const pricing = vt.pricing;
+                    let estPrice = 0;
+                    if (pricing) {
+                      const dist = distance || 0;
+                      if (dist <= 10) estPrice = pricing.fixed;
+                      else if (dist <= 100) estPrice = pricing.fixed + (dist - 10) * pricing.tier1;
+                      else if (dist <= 200) estPrice = pricing.fixed + (90 * pricing.tier1) + (dist - 100) * pricing.tier2;
+                      else estPrice = pricing.fixed + (90 * pricing.tier1) + (100 * pricing.tier2) + (dist - 200) * pricing.tier3;
+                      
+                      const minPrice = (Number(vt.pricePerMin) || 0.5) * (duration || 0);
+                      estPrice = (estPrice + minPrice) * 1.23;
+                    }
+
+                    return (
+                      <button
+                        key={vt.id}
+                        onClick={() => setSelectedVehicleIdx(i)}
+                        className={`relative flex-shrink-0 w-64 p-5 rounded-2xl border-2 transition-all text-left snap-start ${
+                          selectedVehicleIdx === i 
+                            ? 'border-pex-gold bg-pex-gold/5 shadow-lg scale-[1.02]' 
+                            : 'border-gray-100 bg-white hover:border-pex-gold/30'
+                        }`}
+                      >
+                        {selectedVehicleIdx === i && (
+                          <div className="absolute top-3 right-3 text-pex-gold">
+                            <CheckCircle2 size={20} />
+                          </div>
+                        )}
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-gray-400 font-bold mb-2">{vt.name}</div>
+                        <div className="font-bold text-pex-blue text-lg mb-1">
+                          {vt.exampleVehicle}
                         </div>
-                      )}
-                      <div className="text-xs uppercase tracking-widest text-gray-700 mb-1">{vt.name}</div>
-                      <div className="font-bold text-pex-blue mb-2">
-                        {vt.exampleVehicle || vt.description || vt.name}
-                      </div>
-                      <div className="flex items-center gap-3 text-xs text-gray-700">
-                        <span className="flex items-center gap-1"><Users size={12} /> {vt.capacity}</span>
-                        <span className="flex items-center gap-1"><Car size={12} /> {vt.name.includes('SUV') || vt.name.includes('Van') ? '4' : '2'} Bags</span>
-                      </div>
-                      <div className="mt-4 flex items-end justify-between">
-                        <div className="text-lg font-light text-pex-gold">
-                          €{((vt.basePrice || vt.base_price || 0) * (vt.multiplier || 1)).toFixed(2)}
+                        <div className="text-xs text-gray-500 mb-4 line-clamp-1">
+                          {vt.description}
                         </div>
-                        <Badge variant="outline" className="text-[10px] border-gray-300 text-gray-700">Select</Badge>
-                      </div>
-                    </button>
-                  ))}
+                        
+                        <div className="flex items-center gap-4 text-xs text-gray-600 mb-6">
+                          <span className="flex items-center gap-1.5"><Users size={14} className="text-pex-gold" /> {vt.capacity}</span>
+                          <span className="flex items-center gap-1.5"><Clock size={14} className="text-pex-gold" /> 5-8 min</span>
+                        </div>
+
+                        <div className="flex items-end justify-between">
+                          <div className="flex flex-col">
+                            <span className="text-[10px] text-gray-400 uppercase font-bold">Estimated</span>
+                            <span className="text-xl font-bold text-pex-blue">
+                              €{estPrice > 0 ? estPrice.toFixed(2) : '---'}
+                            </span>
+                          </div>
+                          <Badge className={selectedVehicleIdx === i ? 'bg-pex-gold text-pex-blue' : 'bg-gray-100 text-gray-500'}>
+                            {selectedVehicleIdx === i ? 'Selected' : 'Select'}
+                          </Badge>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -1111,8 +1203,8 @@ export default function BookingPage() {
             </Card>
           </div>
 
-          {/* Right Column: Summary & Confirmation */}
-          <div className="space-y-6">
+            {/* Right Column: Summary & Confirmation */}
+            <div className="lg:col-span-1 space-y-6">
             {/* Map Placeholder */}
             <Card className="shadow-xl border-none overflow-hidden h-64 relative">
               {(pickupCoords || dropoffCoords) ? (
